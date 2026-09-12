@@ -1,69 +1,100 @@
-/* ──────────────────────────────────────────────
-   Viewtube — Invidious-powered YouTube frontend
-   Uses public Invidious API (no key required)
-   ────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+   Viewtube — app.js
+   GitHub Pages frontend + Cloudflare Worker CORS proxy
+   ═══════════════════════════════════════════════════════════
 
-// ── State ──────────────────────────────────────
+   ⚠️  SETUP: Set your Cloudflare Worker URL below.
+       After deploying cloudflare-worker.js to CF Workers,
+       paste your worker URL here (no trailing slash):
+*/
+
+const PROXY_BASE = 'https://lucky-sun-99ea.xxgoldenwarriors.workers.dev';
+
+/* ───────────────────────────────────────────────────────── */
+
+// ── State ────────────────────────────────────────────────
 let currentQuery = '';
 let currentPage  = 1;
-let currentVideoId = '';
+let currentVideo = '';
 
-// ── Helpers ────────────────────────────────────
-const $ = id => document.getElementById(id);
-const instance = () => $('instance-select').value;
+// ── DOM helpers ──────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const el = (tag, cls, html) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html !== undefined) e.innerHTML = html;
+  return e;
+};
 
-/** Format seconds → M:SS or H:MM:SS */
-function formatDuration(seconds) {
-  if (!seconds || seconds < 0) return '';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${m}:${String(s).padStart(2,'0')}`;
+// ── Formatters ───────────────────────────────────────────
+function fmtDuration(s) {
+  if (!s || s < 0) return '';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${m}:${String(sec).padStart(2,'0')}`;
 }
 
-/** Compact view count: 1.2M, 340K, etc. */
-function formatViews(n) {
-  if (!n) return '0 views';
+function fmtViews(n) {
+  if (!n) return '';
   if (n >= 1_000_000) return (n/1_000_000).toFixed(1).replace(/\.0$/,'') + 'M views';
-  if (n >= 1_000)     return (n/1_000).toFixed(1).replace(/\.0$/,'') + 'K views';
+  if (n >= 1_000)     return Math.round(n/1_000) + 'K views';
   return n + ' views';
 }
 
-/** Convert Unix timestamp → relative text */
-function formatDate(unix) {
+function fmtDate(unix) {
   if (!unix) return '';
-  const d = new Date(unix * 1000);
-  const diff = (Date.now() - d) / 1000;
-  if (diff < 60)       return 'just now';
-  if (diff < 3600)     return Math.floor(diff/60) + ' min ago';
-  if (diff < 86400)    return Math.floor(diff/3600) + ' hr ago';
-  if (diff < 2592000)  return Math.floor(diff/86400) + ' days ago';
-  if (diff < 31536000) return Math.floor(diff/2592000) + ' mo ago';
-  return Math.floor(diff/31536000) + ' yr ago';
+  const diff = (Date.now() / 1000) - unix;
+  if (diff < 60)        return 'just now';
+  if (diff < 3600)      return Math.floor(diff/60) + ' min ago';
+  if (diff < 86400)     return Math.floor(diff/3600) + ' hr ago';
+  if (diff < 2_592_000) return Math.floor(diff/86400) + ' days ago';
+  if (diff < 31_536_000)return Math.floor(diff/2_592_000) + ' mo ago';
+  return Math.floor(diff/31_536_000) + ' yr ago';
 }
 
-/** Best thumbnail from Invidious videoThumbnails array */
 function bestThumb(thumbs) {
-  if (!thumbs || !thumbs.length) return '';
-  const order = ['maxresdefault','sddefault','high','medium','default'];
-  for (const q of order) {
+  if (!thumbs?.length) return '';
+  const pref = ['maxresdefault','sddefault','high','medium','default'];
+  for (const q of pref) {
     const t = thumbs.find(x => x.quality === q);
-    if (t) return t.url;
+    if (t?.url) return t.url;
   }
-  return thumbs[0].url;
+  return thumbs[0]?.url || '';
 }
 
-/** Fetch wrapper with timeout */
-async function apiFetch(path, params = {}) {
-  const url = new URL(instance() + path);
-  Object.entries(params).forEach(([k,v]) => v !== undefined && url.searchParams.set(k, v));
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── API via Cloudflare Worker proxy ──────────────────────
+async function apiGet(path, params = {}) {
+  if (!PROXY_BASE || PROXY_BASE.includes('YOUR-WORKER')) {
+    throw new Error('PROXY_BASE not set — edit app.js and add your Cloudflare Worker URL.');
+  }
+
+  const instance = $('instance-sel').value;
+  const targetUrl = new URL(instance + path);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) targetUrl.searchParams.set(k, v);
+  });
+
+  const proxyUrl = new URL(PROXY_BASE);
+  proxyUrl.searchParams.set('url', targetUrl.toString());
+
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
+  const timer = setTimeout(() => ctrl.abort(), 14_000);
+
   try {
-    const res = await fetch(url.toString(), { signal: ctrl.signal });
+    const res = await fetch(proxyUrl.toString(), { signal: ctrl.signal });
     clearTimeout(timer);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0,120) : ''}`);
+    }
     return await res.json();
   } catch (e) {
     clearTimeout(timer);
@@ -71,56 +102,67 @@ async function apiFetch(path, params = {}) {
   }
 }
 
-// ── View switching ──────────────────────────────
+// ── Toast notification ───────────────────────────────────
+let toastTimer;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 4500);
+}
+
+// ── View switching ───────────────────────────────────────
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   $(id).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-function showHome() {
+
+// ── State boxes ──────────────────────────────────────────
+function showState(boxId, type, msg, retryFn) {
+  const box = $(boxId);
+  box.className = 'state-box' + (type === 'error' ? ' error' : '');
+  box.innerHTML = type === 'loading'
+    ? `<div class="spinner" aria-hidden="true"></div><p>${esc(msg)}</p>`
+    : type === 'error'
+      ? `<strong>Something went wrong</strong><p>${esc(msg)}</p>
+         ${retryFn ? `<button class="retry-btn" onclick="(${retryFn.name})()">Try again</button>` : ''}`
+      : `<p>${esc(msg)}</p>`;
+  box.classList.remove('hidden');
+}
+function hideState(boxId) { $(boxId).classList.add('hidden'); }
+
+// ── HOME / TRENDING ──────────────────────────────────────
+function navHome() {
+  history.pushState({}, '', location.pathname);
   showView('view-home');
-  if (!$('trending-grid').children.length) loadTrending();
+  if (!$('home-grid').children.length) loadTrending();
 }
 
-// ── Instance change ─────────────────────────────
-function onInstanceChange() {
-  // Re-fetch whatever is currently showing
-  const active = document.querySelector('.view.active');
-  if (active.id === 'view-home') {
-    $('trending-grid').innerHTML = '';
-    loadTrending();
-  } else if (active.id === 'view-search' && currentQuery) {
-    currentPage = 1;
-    runSearch();
-  } else if (active.id === 'view-watch' && currentVideoId) {
-    loadVideo(currentVideoId);
-  }
-}
-
-// ── Trending ────────────────────────────────────
 async function loadTrending() {
-  const region = $('region-select').value;
-  $('trending-loading').classList.remove('hidden');
-  $('trending-error').classList.add('hidden');
-  $('trending-grid').innerHTML = '';
+  $('home-grid').innerHTML = '';
+  showState('home-state', 'loading', 'Loading trending…');
 
   try {
-    const data = await apiFetch('/api/v1/trending', { region, type: 'default' });
-    $('trending-loading').classList.add('hidden');
-    renderVideoGrid('trending-grid', data);
+    const region = $('region-sel').value;
+    const data = await apiGet('/api/v1/trending', { region, type: 'default' });
+    hideState('home-state');
+    if (!data?.length) { showState('home-state', 'empty', 'No trending videos found.'); return; }
+    renderGrid('home-grid', data);
   } catch (e) {
-    $('trending-loading').classList.add('hidden');
-    showError('trending-error', 'Could not load trending videos.', loadTrending);
+    showState('home-state', 'error', e.message, loadTrending);
   }
 }
 
-// ── Search ──────────────────────────────────────
+// ── SEARCH ───────────────────────────────────────────────
 function handleSearch(e) {
   e.preventDefault();
-  const q = $('search-input').value.trim();
+  const q = $('q').value.trim();
   if (!q) return;
   currentQuery = q;
   currentPage  = 1;
+  history.pushState({}, '', `?q=${encodeURIComponent(q)}`);
   showView('view-search');
   runSearch();
 }
@@ -134,234 +176,193 @@ function rerunSearch() {
 async function runSearch() {
   $('search-heading').textContent = `"${currentQuery}"`;
   $('search-grid').innerHTML = '';
-  $('search-loading').classList.remove('hidden');
-  $('search-error').classList.add('hidden');
-  $('search-pagination').classList.add('hidden');
-
-  const sort   = $('sort-select').value;
-  const type   = $('type-select').value;
+  $('pagination').classList.add('hidden');
+  showState('search-state', 'loading', 'Searching…');
 
   try {
-    const data = await apiFetch('/api/v1/search', {
+    const sort = $('sort-sel').value;
+    const type = $('type-sel').value;
+    const data = await apiGet('/api/v1/search', {
       q: currentQuery,
       page: currentPage,
       sort_by: sort,
       type: type === 'all' ? undefined : type,
     });
 
-    $('search-loading').classList.add('hidden');
+    hideState('search-state');
 
-    if (!data || !data.length) {
-      showError('search-error', 'No results found. Try a different query or instance.', null);
+    if (!data?.length) {
+      showState('search-state', 'empty', 'No results. Try a different query or switch instance.');
       return;
     }
 
-    renderVideoGrid('search-grid', data);
+    renderGrid('search-grid', data);
 
-    // Pagination
-    $('search-pagination').classList.remove('hidden');
-    $('page-indicator').textContent = `Page ${currentPage}`;
-    $('prev-page-btn').disabled = currentPage <= 1;
-    $('next-page-btn').disabled = data.length < 20;
+    $('page-lbl').textContent = `Page ${currentPage}`;
+    $('btn-prev').disabled = currentPage <= 1;
+    $('btn-next').disabled = data.length < 20;
+    $('pagination').classList.remove('hidden');
   } catch (e) {
-    $('search-loading').classList.add('hidden');
-    showError('search-error', `Search failed: ${e.message}. Try switching instance.`, runSearch);
+    showState('search-state', 'error', e.message, runSearch);
   }
 }
 
 function changePage(delta) {
   currentPage = Math.max(1, currentPage + delta);
   runSearch();
+  window.scrollTo({ top: 0 });
 }
 
-// ── Render helpers ──────────────────────────────
-function renderVideoGrid(containerId, items) {
+// ── RENDER helpers ────────────────────────────────────────
+function renderGrid(containerId, items) {
   const grid = $(containerId);
   items.forEach(item => {
-    if (item.type === 'video' || (!item.type && item.videoId)) {
+    if (item.type === 'video' || item.videoId) {
       grid.appendChild(makeVideoCard(item));
     } else if (item.type === 'channel') {
       grid.appendChild(makeChannelCard(item));
     }
-    // playlists: skip for now (could be added later)
   });
 }
 
 function makeVideoCard(v) {
   const thumb = bestThumb(v.videoThumbnails);
-  const dur   = formatDuration(v.lengthSeconds);
-
-  const card = document.createElement('article');
-  card.className = 'video-card';
-  card.setAttribute('role', 'button');
+  const dur   = fmtDuration(v.lengthSeconds);
+  const card  = el('article', 'video-card');
   card.setAttribute('tabindex', '0');
-  card.setAttribute('aria-label', v.title);
-
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', v.title || 'Video');
   card.innerHTML = `
-    <div class="video-thumb-wrap">
-      <img class="video-thumb" src="${thumb}" alt="" loading="lazy" onerror="this.style.opacity=0" />
-      ${dur ? `<span class="video-duration">${dur}</span>` : ''}
+    <div class="thumb-wrap">
+      ${thumb ? `<img class="thumb" src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : ''}
+      ${dur ? `<span class="duration">${esc(dur)}</span>` : ''}
     </div>
-    <div class="video-info">
-      <p class="video-card-title">${escHtml(v.title)}</p>
-      <p class="video-card-channel">${escHtml(v.author || '')}</p>
-      <p class="video-card-meta">
-        <span>${formatViews(v.viewCount)}</span>
-        <span>${formatDate(v.published)}</span>
+    <div class="card-body">
+      <p class="card-title">${esc(v.title || '')}</p>
+      <p class="card-channel">${esc(v.author || '')}</p>
+      <p class="card-meta">
+        ${v.viewCount ? `<span>${fmtViews(v.viewCount)}</span>` : ''}
+        ${v.published  ? `<span>${fmtDate(v.published)}</span>` : ''}
       </p>
-    </div>
-  `;
-
-  card.addEventListener('click', () => loadVideo(v.videoId));
-  card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') loadVideo(v.videoId); });
+    </div>`;
+  const go = () => loadVideo(v.videoId);
+  card.addEventListener('click', go);
+  card.addEventListener('keydown', e => (e.key === 'Enter' || e.key === ' ') && go());
   return card;
 }
 
 function makeChannelCard(ch) {
   const thumb = ch.authorThumbnails?.find(t => t.width >= 88)?.url || '';
-  const card = document.createElement('article');
-  card.className = 'channel-card';
+  const card  = el('article', 'channel-card');
   card.innerHTML = `
-    ${thumb ? `<img class="channel-card-avatar" src="${thumb}" alt="" loading="lazy" />` : '<div class="channel-card-avatar"></div>'}
+    ${thumb ? `<img class="ch-card-avatar" src="${esc(thumb)}" alt="" loading="lazy" />` : '<div class="ch-card-avatar"></div>'}
     <div>
-      <p class="channel-card-name">${escHtml(ch.author || ch.channelHandle || '')}</p>
-      <p class="channel-card-subs">${ch.subCountText || ''}</p>
-    </div>
-  `;
+      <p class="ch-card-name">${esc(ch.author || ch.channelHandle || '')}</p>
+      <p class="ch-card-subs">${esc(ch.subCountText || '')}</p>
+    </div>`;
   return card;
 }
 
-// ── Watch / Video ───────────────────────────────
-async function loadVideo(videoId) {
-  currentVideoId = videoId;
+// ── WATCH / VIDEO ─────────────────────────────────────────
+function loadVideo(videoId) {
+  currentVideo = videoId;
+  history.pushState({}, '', `?v=${videoId}`);
   showView('view-watch');
 
-  // Reset UI
-  $('player-area').innerHTML = '<div id="player-loading" class="player-loading"><div class="spinner large"></div></div>';
-  $('video-meta').classList.add('hidden');
-  $('related-list').innerHTML = '';
-  $('related-loading').classList.remove('hidden');
-  $('watch-on-yt').href = `https://www.youtube.com/watch?v=${videoId}`;
-
-  // Build the embed player immediately (YouTube allows direct embeds from anywhere)
+  // Embed player immediately (YouTube-nocookie — no CORS issues, no proxy needed)
+  $('player-wrap').innerHTML = '';
   const iframe = document.createElement('iframe');
-  iframe.src = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0`;
+  iframe.src  = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
+  iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
   iframe.allowFullscreen = true;
-  iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
-  iframe.onload = () => {
-    const loading = $('player-loading');
-    if (loading) loading.remove();
-  };
+  iframe.title = 'Video player';
+  $('player-wrap').appendChild(iframe);
 
-  $('player-area').innerHTML = '';
-  $('player-area').appendChild(iframe);
+  // Reset meta
+  $('video-meta').classList.add('hidden');
+  $('related').innerHTML = '';
+  $('yt-link').href = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Fetch metadata from Invidious
+  // Fetch metadata + related asynchronously
+  fetchVideoMeta(videoId);
+}
+
+async function fetchVideoMeta(videoId) {
   try {
-    const v = await apiFetch(`/api/v1/videos/${videoId}`);
+    const v = await apiGet(`/api/v1/videos/${videoId}`);
 
-    $('video-title').textContent = v.title || '';
-    $('video-views').textContent = formatViews(v.viewCount);
-    $('video-date').textContent  = formatDate(v.published);
-    $('video-description').textContent = v.description || 'No description.';
+    $('v-title').textContent = v.title || '';
+    $('v-views').textContent = fmtViews(v.viewCount);
+    $('v-date').textContent  = fmtDate(v.published);
+    $('v-desc').textContent  = v.description || 'No description.';
 
     if (v.likeCount > 0) {
-      $('video-likes').textContent = '👍 ' + formatViews(v.likeCount).replace(' views','');
-      $('video-likes').classList.remove('hidden');
+      $('v-likes').textContent = '👍 ' + fmtViews(v.likeCount).replace(' views','');
+      $('v-likes').classList.remove('hidden');
+    } else {
+      $('v-likes').classList.add('hidden');
     }
 
-    $('channel-name').textContent = v.author || '';
-    $('channel-subs').textContent = v.subCountText || '';
+    $('ch-name').textContent = v.author || '';
+    $('ch-subs').textContent = v.subCountText || '';
 
-    const avatarThumb = v.authorThumbnails?.find(t => t.width >= 48)?.url;
-    if (avatarThumb) {
-      $('channel-avatar').innerHTML = `<img src="${avatarThumb}" alt="" />`;
-    }
+    const avThumb = v.authorThumbnails?.find(t => t.width >= 48)?.url;
+    $('ch-avatar').innerHTML = avThumb
+      ? `<img src="${esc(avThumb)}" alt="" loading="lazy" />`
+      : '';
 
     $('video-meta').classList.remove('hidden');
 
-    // Related videos
-    $('related-loading').classList.add('hidden');
+    // Related
     if (v.recommendedVideos?.length) {
-      renderRelated(v.recommendedVideos.slice(0, 14));
+      v.recommendedVideos.slice(0, 15).forEach(r => {
+        $('related').appendChild(makeRelatedCard(r));
+      });
     }
-  } catch(e) {
-    $('related-loading').classList.add('hidden');
-    // Metadata failed — player still works, just show minimal info
-    $('video-title').textContent = 'Video';
+  } catch (e) {
+    // Player is already working — just show minimal title
+    $('v-title').textContent = 'Video';
     $('video-meta').classList.remove('hidden');
+    toast('Metadata unavailable: ' + e.message);
   }
 }
 
-function renderRelated(videos) {
-  const list = $('related-list');
-  videos.forEach(v => {
-    const thumb = bestThumb(v.videoThumbnails);
-    const card  = document.createElement('div');
-    card.className = 'related-card';
-    card.innerHTML = `
-      <div class="related-thumb">
-        <img src="${thumb}" alt="" loading="lazy" />
-        ${v.lengthSeconds ? `<span class="video-duration">${formatDuration(v.lengthSeconds)}</span>` : ''}
-      </div>
-      <div class="related-info">
-        <p class="related-title">${escHtml(v.title || '')}</p>
-        <p class="related-channel">${escHtml(v.author || '')}</p>
-        <p class="related-meta">${formatViews(v.viewCount)}</p>
-      </div>
-    `;
-    card.addEventListener('click', () => loadVideo(v.videoId));
-    list.appendChild(card);
-  });
+function makeRelatedCard(v) {
+  const thumb = bestThumb(v.videoThumbnails);
+  const card  = el('div', 'related-card');
+  card.innerHTML = `
+    <div class="rel-thumb">
+      ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : ''}
+      ${v.lengthSeconds ? `<span class="duration">${esc(fmtDuration(v.lengthSeconds))}</span>` : ''}
+    </div>
+    <div class="rel-info">
+      <p class="rel-title">${esc(v.title || '')}</p>
+      <p class="rel-channel">${esc(v.author || '')}</p>
+      <p class="rel-meta">${fmtViews(v.viewCount)}</p>
+    </div>`;
+  card.addEventListener('click', () => loadVideo(v.videoId));
+  return card;
 }
 
-// ── Error display ───────────────────────────────
-function showError(elId, message, retryFn) {
-  const el = $(elId);
-  el.innerHTML = `<strong>Oops</strong>${escHtml(message)}
-    ${retryFn ? `<br/><button class="retry-btn" onclick="(${retryFn.name || '('+retryFn.toString()+')'})()">Try again</button>` : ''}`;
-  el.classList.remove('hidden');
-}
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;');
-}
-
-// ── URL routing (deep-link / back button) ───────
-function parseUrl() {
+// ── URL routing (deep links + back/forward) ───────────────
+function route() {
   const p = new URLSearchParams(location.search);
   const v = p.get('v');
   const q = p.get('q');
   if (v) {
     loadVideo(v);
   } else if (q) {
-    $('search-input').value = q;
+    $('q').value = q;
     currentQuery = q;
     showView('view-search');
     runSearch();
   } else {
-    showHome();
+    showView('view-home');
+    loadTrending();
   }
 }
 
-// Update URL without reload
-function pushState(params) {
-  const url = new URL(location.href);
-  url.search = '';
-  Object.entries(params).forEach(([k,v]) => v && url.searchParams.set(k,v));
-  history.pushState(null, '', url.toString());
-}
+window.addEventListener('popstate', route);
 
-// Intercept navigation to update URL
-const origLoadVideo  = loadVideo;
-const origRunSearch  = runSearch;
-window.loadVideo = function(id) { pushState({v:id}); origLoadVideo(id); };
-
-window.addEventListener('popstate', parseUrl);
-
-// ── Boot ────────────────────────────────────────
-parseUrl();
+// ── Boot ──────────────────────────────────────────────────
+route();
