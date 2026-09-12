@@ -19,12 +19,20 @@
       <span class="logo-text">Viewtube</span>
     </button>
 
+    <nav class="main-nav">
+      <button class="nav-btn active" id="nav-home" onclick="navHome()">Home</button>
+      <button class="nav-btn" id="nav-shorts" onclick="navShorts()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="flex-shrink:0"><path d="M17.77 10.32l-1.2-.5L18 9.06c1.84-.96 2.53-3.23 1.56-5.06s-3.23-2.53-5.06-1.56L6 6.94c-1.29.68-2.07 2.01-2 3.44.07 1.43.97 2.67 2.31 3.22l1.2.5L6 14.94c-1.84.96-2.53 3.23-1.56 5.06.97 1.83 3.23 2.53 5.06 1.56l8.5-4.5c1.29-.68 2.07-2.01 2-3.44-.07-1.43-.97-2.67-2.23-3.3zM10 14.45v-5l5 2.5-5 2.5z"/></svg>
+        Shorts
+      </button>
+    </nav>
+
     <form class="search-form" onsubmit="handleSearch(event)" role="search">
       <input id="q" class="search-input" type="search"
-        placeholder="Search…" autocomplete="off" spellcheck="false"
+        placeholder="Search videos…" autocomplete="off" spellcheck="false"
         aria-label="Search videos" />
       <button class="search-btn" type="submit" aria-label="Search">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
@@ -32,20 +40,23 @@
     </form>
 
     <div class="header-right">
-      <label class="hdr-label" for="instance-sel">Instance</label>
-      <select id="instance-sel" class="sel" aria-label="Piped API instance" onchange="onInstanceChange()">
-        <option value="https://pipedapi.kavin.rocks">kavin.rocks (official)</option>
-        <option value="https://pipedapi-libre.kavin.rocks">kavin.rocks libre</option>
-        <option value="https://pipedapi.adminforge.de">adminforge.de 🇩🇪</option>
-        <option value="https://piped-api.privacy.com.de">privacy.com.de 🇩🇪</option>
-        <option value="https://pipedapi.r4fo.com">r4fo.com 🇩🇪</option>
-        <option value="https://api.piped.yt">piped.yt 🇩🇪</option>
-        <option value="https://pipedapi.drgns.space">drgns.space 🇺🇸</option>
-        <option value="https://pipedapi.darkness.services">darkness.services 🇺🇸</option>
-        <option value="https://api.piped.private.coffee">private.coffee 🇦🇹</option>
-        <option value="https://pipedapi.ducks.party">ducks.party 🇳🇱</option>
-      </select>
-      <span id="instance-status" class="instance-status" title="Instance health"></span>
+      <!-- Custom animated instance dropdown -->
+      <div id="instance-dropdown-wrapper" class="dd-wrapper" aria-label="Piped API instance">
+        <button class="dd-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="dd-trigger-flag">🇦🇹</span>
+          <span class="dd-trigger-label">private.coffee</span>
+          <svg class="dd-caret" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+            <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="dd-list" role="listbox"></div>
+      </div>
+
+      <!-- Instance status badge -->
+      <div id="instance-status" class="instance-status-badge status-checking" title="Checking instance…">
+        <span class="status-dot"></span>
+        <span class="status-label">Connecting…</span>
+      </div>
     </div>
   </header>
 
@@ -114,13 +125,13 @@
           <div id="video-meta" class="video-meta hidden">
             <h1 id="v-title" class="v-title"></h1>
             <div class="v-stats">
-              <span id="v-views"></span>
-              <span id="v-date"></span>
+              <span id="v-views" class="stat-chip"></span>
+              <span id="v-date" class="stat-chip"></span>
               <span id="v-likes" class="likes-pill hidden"></span>
             </div>
             <a id="ch-link" class="ch-link" href="#" onclick="return false;">
               <div id="ch-avatar" class="ch-avatar" aria-hidden="true"></div>
-              <div>
+              <div class="ch-text">
                 <p id="ch-name" class="ch-name"></p>
                 <p id="ch-subs" class="ch-subs"></p>
               </div>
@@ -130,7 +141,8 @@
               <div id="v-desc" class="v-desc"></div>
             </details>
             <a id="yt-link" href="#" target="_blank" rel="noopener noreferrer" class="yt-link">
-              Watch on YouTube ↗
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="flex-shrink:0"><path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+              Watch on YouTube
             </a>
           </div>
         </div>
@@ -142,6 +154,30 @@
           </div>
         </aside>
       </div>
+    </section>
+
+    <!-- Shorts -->
+    <section id="view-shorts" class="view" aria-label="Shorts">
+      <div class="shorts-shell">
+        <!-- Left: video column -->
+        <div class="shorts-col" id="shorts-col">
+          <div id="shorts-state" class="state-box hidden"></div>
+          <div id="shorts-feed" class="shorts-feed"></div>
+        </div>
+
+        <!-- Right: action sidebar (populated by JS) -->
+        <div class="shorts-sidebar" id="shorts-sidebar">
+          <div class="shorts-actions-placeholder"></div>
+        </div>
+      </div>
+
+      <!-- Nav arrows -->
+      <button class="shorts-nav-btn shorts-nav-up" id="shorts-up" onclick="shortsNav(-1)" aria-label="Previous short">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+      </button>
+      <button class="shorts-nav-btn shorts-nav-down" id="shorts-down" onclick="shortsNav(1)" aria-label="Next short">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
     </section>
 
   </main>
