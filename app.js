@@ -1,33 +1,36 @@
 /* ═══════════════════════════════════════════════════════════
-   Viewtube — app.js
+   Viewtube — app.js  (Piped API edition)
    GitHub Pages frontend + Cloudflare Worker CORS proxy
    ═══════════════════════════════════════════════════════════
 
    ⚠️  SETUP: Set your Cloudflare Worker URL below.
-       After deploying cloudflare-worker.js to CF Workers,
-       paste your worker URL here (no trailing slash):
 */
 
 const PROXY_BASE = 'https://lucky-sun-99ea.xxgoldenwarriors.workers.dev';
 
 /* ───────────────────────────────────────────────────────── */
 
-// ── Invidious instances (ordered by preference) ──────────
-// Official public list as of Sept 2026: https://docs.invidious.io/instances/
+// ── Piped API instances (ordered by preference) ──────────
+// Piped has no bot-challenge walls on server-to-server requests.
+// Source: https://github.com/TeamPiped/Piped/wiki/Instances
 const ALL_INSTANCES = [
-  'https://inv.nadeko.net',          // 🇨🇱 Chile
-  'https://invidious.nerdvpn.de',    // 🇺🇦 Ukraine
-  'https://yt.chocolatemoo53.com',   // 🇺🇸 US
-  'https://invidious.tiekoetter.com',// 🇩🇪 Germany
-  'https://invidious.f5.si',         // 🇯🇵 Japan
-  'https://inv.zoomerville.com',     // 🇺🇸 US
-  'https://inv.thepixora.com',       // 🌐 Cloudflare
+  'https://pipedapi.kavin.rocks',        // official
+  'https://pipedapi-libre.kavin.rocks',  // official libre
+  'https://pipedapi.adminforge.de',      // 🇩🇪
+  'https://piped-api.privacy.com.de',    // 🇩🇪
+  'https://pipedapi.r4fo.com',           // 🇩🇪
+  'https://api.piped.yt',                // 🇩🇪
+  'https://pipedapi.drgns.space',        // 🇺🇸
+  'https://pipedapi.darkness.services',  // 🇺🇸
+  'https://api.piped.private.coffee',    // 🇦🇹
+  'https://pipedapi.ducks.party',        // 🇳🇱
 ];
 
 // ── State ────────────────────────────────────────────────
-let currentQuery = '';
-let currentPage  = 1;
-let currentVideo = '';
+let currentQuery    = '';
+let currentPage     = 1;
+let currentNextpage = null; // Piped uses cursor-based pagination
+let currentVideo    = '';
 
 // ── DOM helpers ──────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -55,25 +58,9 @@ function fmtViews(n) {
   return n + ' views';
 }
 
-function fmtDate(unix) {
-  if (!unix) return '';
-  const diff = (Date.now() / 1000) - unix;
-  if (diff < 60)        return 'just now';
-  if (diff < 3600)      return Math.floor(diff/60) + ' min ago';
-  if (diff < 86400)     return Math.floor(diff/3600) + ' hr ago';
-  if (diff < 2_592_000) return Math.floor(diff/86400) + ' days ago';
-  if (diff < 31_536_000)return Math.floor(diff/2_592_000) + ' mo ago';
-  return Math.floor(diff/31_536_000) + ' yr ago';
-}
-
-function bestThumb(thumbs) {
-  if (!thumbs?.length) return '';
-  const pref = ['maxresdefault','sddefault','high','medium','default'];
-  for (const q of pref) {
-    const t = thumbs.find(x => x.quality === q);
-    if (t?.url) return t.url;
-  }
-  return thumbs[0]?.url || '';
+// Piped returns relative strings like "3 months ago" — pass through directly
+function fmtUploadedDate(str) {
+  return str || '';
 }
 
 function esc(s) {
@@ -82,33 +69,38 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Extract video ID from a Piped url field ("/watch?v=XYZ") ──
+function extractId(url) {
+  if (!url) return '';
+  try {
+    // url is like "/watch?v=VIDEO_ID"
+    const u = new URL(url, 'https://x');
+    return u.searchParams.get('v') || '';
+  } catch { return ''; }
+}
+
 // ── Instance status indicator ─────────────────────────────
 function setInstanceStatus(state) {
-  // state: 'ok' | 'error' | 'checking'
   const el = $('instance-status');
   if (!el) return;
-  const map = { ok: '🟢', error: '🔴', checking: '🟡' };
-  el.textContent = map[state] || '';
+  el.textContent = { ok: '🟢', error: '🔴', checking: '🟡' }[state] || '';
   el.title = state === 'ok' ? 'Instance is responding'
            : state === 'error' ? 'Instance unavailable'
            : 'Checking instance…';
 }
 
-// Called when user manually changes the instance dropdown
 function onInstanceChange() {
-  // Reset home grid so it reloads with the new instance
   $('home-grid').innerHTML = '';
   setInstanceStatus('checking');
 }
 
-// ── Auto-fallback: try instances until one works ──────────
+// ── Core fetch with auto-fallback across all instances ────
 async function fetchWithFallback(path, params = {}) {
   if (!PROXY_BASE || PROXY_BASE.includes('YOUR-WORKER')) {
     throw new Error('PROXY_BASE not set — edit app.js and add your Cloudflare Worker URL.');
   }
 
-  const sel = $('instance-sel');
-  // Build ordered list: selected instance first, then the rest
+  const sel      = $('instance-sel');
   const selected = sel?.value || ALL_INSTANCES[0];
   const ordered  = [selected, ...ALL_INSTANCES.filter(u => u !== selected)];
 
@@ -116,7 +108,6 @@ async function fetchWithFallback(path, params = {}) {
   for (const instance of ordered) {
     try {
       const data = await doFetch(instance, path, params);
-      // Success — update the dropdown to reflect the working instance
       if (sel && sel.value !== instance) {
         sel.value = instance;
         toast(`Switched to ${new URL(instance).hostname}`);
@@ -125,12 +116,11 @@ async function fetchWithFallback(path, params = {}) {
       return data;
     } catch (e) {
       lastErr = e;
-      // Don't bother trying more if it was a deliberate abort
       if (e.name === 'AbortError') throw e;
     }
   }
   setInstanceStatus('error');
-  throw lastErr || new Error('All instances failed');
+  throw lastErr || new Error('All Piped instances failed');
 }
 
 async function doFetch(instance, path, params) {
@@ -150,12 +140,11 @@ async function doFetch(instance, path, params) {
     clearTimeout(timer);
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0,120) : ''}`);
+      throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0, 120) : ''}`);
     }
-    // Guard against HTML error pages masquerading as 200 OK
     const text = await res.text();
     if (text.trimStart().startsWith('<')) {
-      throw new Error('Instance returned HTML instead of JSON (likely down or rate-limited)');
+      throw new Error('Instance returned HTML instead of JSON (bot-challenged or down)');
     }
     return JSON.parse(text);
   } catch (e) {
@@ -164,7 +153,6 @@ async function doFetch(instance, path, params) {
   }
 }
 
-// Legacy wrapper kept for clarity — everything goes through fallback now
 async function apiGet(path, params = {}) {
   return fetchWithFallback(path, params);
 }
@@ -201,6 +189,7 @@ function showState(boxId, type, msg, retryFn) {
 function hideState(boxId) { $(boxId).classList.add('hidden'); }
 
 // ── HOME / TRENDING ──────────────────────────────────────
+// Piped: GET /trending?region=US → array of stream objects
 function navHome() {
   history.pushState({}, '', location.pathname);
   showView('view-home');
@@ -214,7 +203,7 @@ async function loadTrending() {
 
   try {
     const region = $('region-sel').value;
-    const data = await apiGet('/api/v1/trending', { region, type: 'default' });
+    const data   = await apiGet('/trending', { region });
     hideState('home-state');
     if (!data?.length) { showState('home-state', 'empty', 'No trending videos found.'); return; }
     renderGrid('home-grid', data);
@@ -224,12 +213,14 @@ async function loadTrending() {
 }
 
 // ── SEARCH ───────────────────────────────────────────────
+// Piped: GET /search?q=...&filter=videos&nextpage=...
 function handleSearch(e) {
   e.preventDefault();
   const q = $('q').value.trim();
   if (!q) return;
-  currentQuery = q;
-  currentPage  = 1;
+  currentQuery    = q;
+  currentPage     = 1;
+  currentNextpage = null;
   history.pushState({}, '', `?q=${encodeURIComponent(q)}`);
   showView('view-search');
   runSearch();
@@ -237,7 +228,8 @@ function handleSearch(e) {
 
 function rerunSearch() {
   if (!currentQuery) return;
-  currentPage = 1;
+  currentPage     = 1;
+  currentNextpage = null;
   runSearch();
 }
 
@@ -249,27 +241,32 @@ async function runSearch() {
   setInstanceStatus('checking');
 
   try {
-    const sort = $('sort-sel').value;
-    const type = $('type-sel').value;
-    const data = await apiGet('/api/v1/search', {
-      q: currentQuery,
-      page: currentPage,
-      sort_by: sort,
-      type: type === 'all' ? undefined : type,
-    });
+    const filter = $('type-sel').value;   // videos | channels | playlists | all
+    const params = {
+      q:      currentQuery,
+      filter: filter === 'all' ? 'all' : filter,
+    };
+    // Piped uses nextpage cursor for pagination
+    if (currentNextpage && currentPage > 1) {
+      params.nextpage = currentNextpage;
+    }
 
+    const data = await apiGet('/search', params);
     hideState('search-state');
 
-    if (!data?.length) {
+    const items = data.items || data; // Piped returns { items, nextpage } or just []
+    currentNextpage = data.nextpage || null;
+
+    if (!items?.length) {
       showState('search-state', 'empty', 'No results. Try a different query or switch instance.');
       return;
     }
 
-    renderGrid('search-grid', data);
+    renderGrid('search-grid', items);
 
     $('page-lbl').textContent = `Page ${currentPage}`;
-    $('btn-prev').disabled = currentPage <= 1;
-    $('btn-next').disabled = data.length < 20;
+    $('btn-prev').disabled    = currentPage <= 1;
+    $('btn-next').disabled    = !currentNextpage;
     $('pagination').classList.remove('hidden');
   } catch (e) {
     showState('search-state', 'error', e.message, runSearch);
@@ -277,6 +274,12 @@ async function runSearch() {
 }
 
 function changePage(delta) {
+  if (delta < 0) {
+    // Piped doesn't support going back via cursor — reload from start
+    currentPage     = Math.max(1, currentPage + delta);
+    currentNextpage = null;
+    if (currentPage === 1) { runSearch(); return; }
+  }
   currentPage = Math.max(1, currentPage + delta);
   runSearch();
   window.scrollTo({ top: 0 });
@@ -286,18 +289,29 @@ function changePage(delta) {
 function renderGrid(containerId, items) {
   const grid = $(containerId);
   items.forEach(item => {
-    if (item.type === 'video' || item.videoId) {
+    // Piped item types: stream (video), channel, playlist
+    if (item.type === 'stream' || item.url?.includes('/watch')) {
       grid.appendChild(makeVideoCard(item));
-    } else if (item.type === 'channel') {
+    } else if (item.type === 'channel' || item.url?.includes('/channel')) {
       grid.appendChild(makeChannelCard(item));
+    } else if (item.type === 'playlist') {
+      grid.appendChild(makeVideoCard(item)); // render playlist like a video card
     }
   });
 }
 
 function makeVideoCard(v) {
-  const thumb = bestThumb(v.videoThumbnails);
-  const dur   = fmtDuration(v.lengthSeconds);
-  const card  = el('article', 'video-card');
+  // Piped field names differ from Invidious:
+  //   thumbnail  (not videoThumbnails array)
+  //   duration   (seconds, int)
+  //   views      (not viewCount)
+  //   uploadedDate (relative string, not unix)
+  //   uploader   (not author)
+  //   url        ("/watch?v=ID")
+  const videoId = extractId(v.url);
+  const thumb   = v.thumbnail || '';
+  const dur     = fmtDuration(v.duration);
+  const card    = el('article', 'video-card');
   card.setAttribute('tabindex', '0');
   card.setAttribute('role', 'button');
   card.setAttribute('aria-label', v.title || 'Video');
@@ -308,88 +322,95 @@ function makeVideoCard(v) {
     </div>
     <div class="card-body">
       <p class="card-title">${esc(v.title || '')}</p>
-      <p class="card-channel">${esc(v.author || '')}</p>
+      <p class="card-channel">${esc(v.uploader || v.uploaderName || '')}</p>
       <p class="card-meta">
-        ${v.viewCount ? `<span>${fmtViews(v.viewCount)}</span>` : ''}
-        ${v.published  ? `<span>${fmtDate(v.published)}</span>` : ''}
+        ${v.views ? `<span>${fmtViews(v.views)}</span>` : ''}
+        ${v.uploadedDate ? `<span>${esc(fmtUploadedDate(v.uploadedDate))}</span>` : ''}
+        ${v.uploaded ? `<span>${esc(fmtUploadedDate(v.uploaded))}</span>` : ''}
       </p>
     </div>`;
-  const go = () => loadVideo(v.videoId);
-  card.addEventListener('click', go);
-  card.addEventListener('keydown', e => (e.key === 'Enter' || e.key === ' ') && go());
+  if (videoId) {
+    const go = () => loadVideo(videoId);
+    card.addEventListener('click', go);
+    card.addEventListener('keydown', e => (e.key === 'Enter' || e.key === ' ') && go());
+  }
   return card;
 }
 
 function makeChannelCard(ch) {
-  const thumb = ch.authorThumbnails?.find(t => t.width >= 88)?.url || '';
+  // Piped channel fields: name, thumbnail, subscribers, description, url
+  const thumb = ch.thumbnail || '';
   const card  = el('article', 'channel-card');
   card.innerHTML = `
     ${thumb ? `<img class="ch-card-avatar" src="${esc(thumb)}" alt="" loading="lazy" />` : '<div class="ch-card-avatar"></div>'}
     <div>
-      <p class="ch-card-name">${esc(ch.author || ch.channelHandle || '')}</p>
-      <p class="ch-card-subs">${esc(ch.subCountText || '')}</p>
+      <p class="ch-card-name">${esc(ch.name || '')}</p>
+      <p class="ch-card-subs">${ch.subscribers > 0 ? fmtViews(ch.subscribers).replace(' views','') + ' subs' : ''}</p>
     </div>`;
   return card;
 }
 
 // ── WATCH / VIDEO ─────────────────────────────────────────
+// Piped: GET /streams/:videoId
 function loadVideo(videoId) {
   currentVideo = videoId;
   history.pushState({}, '', `?v=${videoId}`);
   showView('view-watch');
 
-  // Embed player immediately (YouTube-nocookie — no CORS issues, no proxy needed)
+  // Embed immediately via YouTube nocookie (no proxy needed for playback)
   $('player-wrap').innerHTML = '';
-  const iframe = document.createElement('iframe');
-  iframe.src  = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
-  iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+  const iframe       = document.createElement('iframe');
+  iframe.src         = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
+  iframe.allow       = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
   iframe.allowFullscreen = true;
-  iframe.title = 'Video player';
+  iframe.title       = 'Video player';
   $('player-wrap').appendChild(iframe);
 
-  // Reset meta
   $('video-meta').classList.add('hidden');
   $('related').innerHTML = '';
   $('yt-link').href = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Fetch metadata + related asynchronously
   fetchVideoMeta(videoId);
 }
 
 async function fetchVideoMeta(videoId) {
   try {
-    const v = await apiGet(`/api/v1/videos/${videoId}`);
+    // Piped /streams/:videoId response fields:
+    //   title, description, views, likes, uploader, uploaderUrl,
+    //   uploaderAvatar, uploaderSubscriberCount, uploadDate,
+    //   relatedStreams[], thumbnailUrl, duration
+    const v = await apiGet(`/streams/${videoId}`);
 
     $('v-title').textContent = v.title || '';
-    $('v-views').textContent = fmtViews(v.viewCount);
-    $('v-date').textContent  = fmtDate(v.published);
+    $('v-views').textContent = fmtViews(v.views);
+    $('v-date').textContent  = v.uploadDate ? new Date(v.uploadDate).toLocaleDateString() : '';
     $('v-desc').textContent  = v.description || 'No description.';
 
-    if (v.likeCount > 0) {
-      $('v-likes').textContent = '👍 ' + fmtViews(v.likeCount).replace(' views','');
+    if (v.likes > 0) {
+      $('v-likes').textContent = '👍 ' + fmtViews(v.likes).replace(' views', '');
       $('v-likes').classList.remove('hidden');
     } else {
       $('v-likes').classList.add('hidden');
     }
 
-    $('ch-name').textContent = v.author || '';
-    $('ch-subs').textContent = v.subCountText || '';
+    $('ch-name').textContent = v.uploader || '';
+    $('ch-subs').textContent = v.uploaderSubscriberCount > 0
+      ? fmtViews(v.uploaderSubscriberCount).replace(' views', '') + ' subscribers'
+      : '';
 
-    const avThumb = v.authorThumbnails?.find(t => t.width >= 48)?.url;
-    $('ch-avatar').innerHTML = avThumb
-      ? `<img src="${esc(avThumb)}" alt="" loading="lazy" />`
+    $('ch-avatar').innerHTML = v.uploaderAvatar
+      ? `<img src="${esc(v.uploaderAvatar)}" alt="" loading="lazy" />`
       : '';
 
     $('video-meta').classList.remove('hidden');
 
-    // Related
-    if (v.recommendedVideos?.length) {
-      v.recommendedVideos.slice(0, 15).forEach(r => {
+    // Related streams — Piped calls them relatedStreams
+    if (v.relatedStreams?.length) {
+      v.relatedStreams.slice(0, 15).forEach(r => {
         $('related').appendChild(makeRelatedCard(r));
       });
     }
   } catch (e) {
-    // Player is already working — just show minimal title
     $('v-title').textContent = 'Video';
     $('video-meta').classList.remove('hidden');
     toast('Metadata unavailable: ' + e.message);
@@ -397,23 +418,24 @@ async function fetchVideoMeta(videoId) {
 }
 
 function makeRelatedCard(v) {
-  const thumb = bestThumb(v.videoThumbnails);
-  const card  = el('div', 'related-card');
+  const videoId = extractId(v.url);
+  const thumb   = v.thumbnail || '';
+  const card    = el('div', 'related-card');
   card.innerHTML = `
     <div class="rel-thumb">
       ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : ''}
-      ${v.lengthSeconds ? `<span class="duration">${esc(fmtDuration(v.lengthSeconds))}</span>` : ''}
+      ${v.duration ? `<span class="duration">${esc(fmtDuration(v.duration))}</span>` : ''}
     </div>
     <div class="rel-info">
       <p class="rel-title">${esc(v.title || '')}</p>
-      <p class="rel-channel">${esc(v.author || '')}</p>
-      <p class="rel-meta">${fmtViews(v.viewCount)}</p>
+      <p class="rel-channel">${esc(v.uploader || v.uploaderName || '')}</p>
+      <p class="rel-meta">${fmtViews(v.views)}</p>
     </div>`;
-  card.addEventListener('click', () => loadVideo(v.videoId));
+  if (videoId) card.addEventListener('click', () => loadVideo(videoId));
   return card;
 }
 
-// ── URL routing (deep links + back/forward) ───────────────
+// ── URL routing ──────────────────────────────────────────
 function route() {
   const p = new URLSearchParams(location.search);
   const v = p.get('v');
@@ -421,8 +443,9 @@ function route() {
   if (v) {
     loadVideo(v);
   } else if (q) {
-    $('q').value = q;
-    currentQuery = q;
+    $('q').value    = q;
+    currentQuery    = q;
+    currentNextpage = null;
     showView('view-search');
     runSearch();
   } else {
@@ -433,5 +456,5 @@ function route() {
 
 window.addEventListener('popstate', route);
 
-// ── Boot ──────────────────────────────────────────────────
+// ── Boot ─────────────────────────────────────────────────
 route();
