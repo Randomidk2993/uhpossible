@@ -348,3 +348,11 @@ details[open] .desc-toggle::before { content: '▾ '; }
 @media (max-width: 400px) {
   .video-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
 }
+
+/* ── Instance status dot ─────────────────────────────── */
+.instance-status {
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+}
