@@ -33,20 +33,22 @@
 
     <div class="header-right">
       <label class="hdr-label" for="instance-sel">Instance</label>
-      <select id="instance-sel" class="sel" aria-label="Invidious instance" onchange="onInstanceChange()">
-        <option value="https://inv.nadeko.net">nadeko.net 🇨🇱</option>
-        <option value="https://invidious.nerdvpn.de">nerdvpn.de 🇺🇦</option>
-        <option value="https://yt.chocolatemoo53.com">chocolatemoo53 🇺🇸</option>
-        <option value="https://invidious.tiekoetter.com">tiekoetter.com 🇩🇪</option>
-        <option value="https://invidious.f5.si">f5.si 🇯🇵</option>
-        <option value="https://inv.zoomerville.com">zoomerville.com 🇺🇸</option>
-        <option value="https://inv.thepixora.com">thepixora.com 🌐</option>
+      <select id="instance-sel" class="sel" aria-label="Piped API instance" onchange="onInstanceChange()">
+        <option value="https://pipedapi.kavin.rocks">kavin.rocks (official)</option>
+        <option value="https://pipedapi-libre.kavin.rocks">kavin.rocks libre</option>
+        <option value="https://pipedapi.adminforge.de">adminforge.de 🇩🇪</option>
+        <option value="https://piped-api.privacy.com.de">privacy.com.de 🇩🇪</option>
+        <option value="https://pipedapi.r4fo.com">r4fo.com 🇩🇪</option>
+        <option value="https://api.piped.yt">piped.yt 🇩🇪</option>
+        <option value="https://pipedapi.drgns.space">drgns.space 🇺🇸</option>
+        <option value="https://pipedapi.darkness.services">darkness.services 🇺🇸</option>
+        <option value="https://api.piped.private.coffee">private.coffee 🇦🇹</option>
+        <option value="https://pipedapi.ducks.party">ducks.party 🇳🇱</option>
       </select>
       <span id="instance-status" class="instance-status" title="Instance health"></span>
     </div>
   </header>
 
-  <!-- Toast for errors/notices -->
   <div id="toast" class="toast hidden" role="alert" aria-live="polite"></div>
 
   <main id="app">
@@ -86,8 +88,9 @@
             <option value="view_count">Most viewed</option>
           </select>
           <select id="type-sel" class="sel sm" onchange="rerunSearch()" aria-label="Content type">
-            <option value="video">Videos</option>
-            <option value="channel">Channels</option>
+            <option value="videos">Videos</option>
+            <option value="channels">Channels</option>
+            <option value="playlists">Playlists</option>
             <option value="all">All</option>
           </select>
         </div>
@@ -145,7 +148,7 @@
 
   <footer class="footer">
     Videos play via YouTube's official embed player.
-    Metadata via public <a href="https://invidious.io" target="_blank" rel="noopener">Invidious</a> instances.
+    Metadata via public <a href="https://piped.video" target="_blank" rel="noopener">Piped</a> instances.
     All content © respective owners. Not affiliated with YouTube or Google.
   </footer>
 
