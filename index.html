@@ -33,13 +33,16 @@
 
     <div class="header-right">
       <label class="hdr-label" for="instance-sel">Instance</label>
-      <select id="instance-sel" class="sel" aria-label="Invidious instance">
-        <option value="https://yewtu.be">yewtu.be</option>
-        <option value="https://invidious.jing.rocks">jing.rocks</option>
-        <option value="https://inv.tux.pizza">tux.pizza</option>
-        <option value="https://invidious.privacydev.net">privacydev.net</option>
-        <option value="https://iv.datura.network">datura.network</option>
+      <select id="instance-sel" class="sel" aria-label="Invidious instance" onchange="onInstanceChange()">
+        <option value="https://inv.nadeko.net">nadeko.net 🇨🇱</option>
+        <option value="https://invidious.nerdvpn.de">nerdvpn.de 🇺🇦</option>
+        <option value="https://yt.chocolatemoo53.com">chocolatemoo53 🇺🇸</option>
+        <option value="https://invidious.tiekoetter.com">tiekoetter.com 🇩🇪</option>
+        <option value="https://invidious.f5.si">f5.si 🇯🇵</option>
+        <option value="https://inv.zoomerville.com">zoomerville.com 🇺🇸</option>
+        <option value="https://inv.thepixora.com">thepixora.com 🌐</option>
       </select>
+      <span id="instance-status" class="instance-status" title="Instance health"></span>
     </div>
   </header>
 
