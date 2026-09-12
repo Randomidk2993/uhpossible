@@ -1,38 +1,39 @@
 /* ═══════════════════════════════════════════════════════════
-   Viewtube — app.js  (Piped API edition)
-   GitHub Pages frontend + Cloudflare Worker CORS proxy
-   ═══════════════════════════════════════════════════════════
-
-   ⚠️  SETUP: Set your Cloudflare Worker URL below.
-*/
+   Viewtube — app.js  (Piped API edition, improved)
+   ═══════════════════════════════════════════════════════════ */
 
 const PROXY_BASE = 'https://lucky-sun-99ea.xxgoldenwarriors.workers.dev';
 
-/* ───────────────────────────────────────────────────────── */
-
-// ── Piped API instances (ordered by preference) ──────────
-// Piped has no bot-challenge walls on server-to-server requests.
-// Source: https://github.com/TeamPiped/Piped/wiki/Instances
+/* ── Piped instances — private.coffee + ducks.party first ── */
 const ALL_INSTANCES = [
-  'https://pipedapi.kavin.rocks',        // official
-  'https://pipedapi-libre.kavin.rocks',  // official libre
-  'https://pipedapi.adminforge.de',      // 🇩🇪
-  'https://piped-api.privacy.com.de',    // 🇩🇪
-  'https://pipedapi.r4fo.com',           // 🇩🇪
-  'https://api.piped.yt',                // 🇩🇪
-  'https://pipedapi.drgns.space',        // 🇺🇸
-  'https://pipedapi.darkness.services',  // 🇺🇸
-  'https://api.piped.private.coffee',    // 🇦🇹
-  'https://pipedapi.ducks.party',        // 🇳🇱
+  { url: 'https://api.piped.private.coffee',    label: 'private.coffee',     flag: '🇦🇹' },
+  { url: 'https://pipedapi.ducks.party',         label: 'ducks.party',        flag: '🇳🇱' },
+  { url: 'https://pipedapi.kavin.rocks',         label: 'kavin.rocks',        flag: '⭐' },
+  { url: 'https://pipedapi-libre.kavin.rocks',   label: 'kavin libre',        flag: '⭐' },
+  { url: 'https://pipedapi.adminforge.de',       label: 'adminforge.de',      flag: '🇩🇪' },
+  { url: 'https://piped-api.privacy.com.de',     label: 'privacy.com.de',     flag: '🇩🇪' },
+  { url: 'https://pipedapi.r4fo.com',            label: 'r4fo.com',           flag: '🇩🇪' },
+  { url: 'https://api.piped.yt',                 label: 'piped.yt',           flag: '🇩🇪' },
+  { url: 'https://pipedapi.drgns.space',         label: 'drgns.space',        flag: '🇺🇸' },
+  { url: 'https://pipedapi.darkness.services',   label: 'darkness.services',  flag: '🇺🇸' },
 ];
 
-// ── State ────────────────────────────────────────────────
+/* ── State ── */
 let currentQuery    = '';
 let currentPage     = 1;
-let currentNextpage = null; // Piped uses cursor-based pagination
+let currentNextpage = null;
 let currentVideo    = '';
+let activeInstance  = ALL_INSTANCES[0].url; // default = private.coffee
 
-// ── DOM helpers ──────────────────────────────────────────
+/* ── Shorts state ── */
+let shortsItems       = [];   // array of short video objects
+let shortsIndex       = 0;    // currently visible short
+let shortsLoading     = false;
+let shortsNextpage    = null;
+let shortsRegion      = 'US';
+let shortsIsTransitioning = false;
+
+/* ── DOM helpers ── */
 const $  = id => document.getElementById(id);
 const el = (tag, cls, html) => {
   const e = document.createElement(tag);
@@ -41,7 +42,7 @@ const el = (tag, cls, html) => {
   return e;
 };
 
-// ── Formatters ───────────────────────────────────────────
+/* ── Formatters ── */
 function fmtDuration(s) {
   if (!s || s < 0) return '';
   const h = Math.floor(s / 3600);
@@ -51,17 +52,25 @@ function fmtDuration(s) {
   return `${m}:${String(sec).padStart(2,'0')}`;
 }
 
-function fmtViews(n) {
+function fmtCount(n) {
   if (!n) return '';
-  if (n >= 1_000_000) return (n/1_000_000).toFixed(1).replace(/\.0$/,'') + 'M views';
-  if (n >= 1_000)     return Math.round(n/1_000) + 'K views';
-  return n + ' views';
+  if (n >= 1_000_000_000) return (n/1_000_000_000).toFixed(1).replace(/\.0$/,'') + 'B';
+  if (n >= 1_000_000)     return (n/1_000_000).toFixed(1).replace(/\.0$/,'') + 'M';
+  if (n >= 1_000)         return Math.round(n/1_000) + 'K';
+  return String(n);
 }
 
-// Piped returns relative strings like "3 months ago" — pass through directly
-function fmtUploadedDate(str) {
-  return str || '';
+function fmtViews(n) {
+  const c = fmtCount(n);
+  return c ? c + ' views' : '';
 }
+
+function fmtSubs(n) {
+  const c = fmtCount(n);
+  return c ? c + ' subscribers' : '';
+}
+
+function fmtUploadedDate(str) { return str || ''; }
 
 function esc(s) {
   return String(s ?? '')
@@ -69,62 +78,158 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ── Extract video ID from a Piped url field ("/watch?v=XYZ") ──
 function extractId(url) {
   if (!url) return '';
   try {
-    // url is like "/watch?v=VIDEO_ID"
     const u = new URL(url, 'https://x');
     return u.searchParams.get('v') || '';
   } catch { return ''; }
 }
 
-// ── Instance status indicator ─────────────────────────────
-function setInstanceStatus(state) {
-  const el = $('instance-status');
-  if (!el) return;
-  el.textContent = { ok: '🟢', error: '🔴', checking: '🟡' }[state] || '';
-  el.title = state === 'ok' ? 'Instance is responding'
-           : state === 'error' ? 'Instance unavailable'
-           : 'Checking instance…';
+/* ── Custom Dropdown ── */
+function buildInstanceDropdown() {
+  const wrapper = $('instance-dropdown-wrapper');
+  if (!wrapper) return;
+
+  const trigger = wrapper.querySelector('.dd-trigger');
+  const list    = wrapper.querySelector('.dd-list');
+  if (!trigger || !list) return;
+
+  // Populate list items
+  list.innerHTML = '';
+  ALL_INSTANCES.forEach(inst => {
+    const item = document.createElement('div');
+    item.className = 'dd-item';
+    item.dataset.url = inst.url;
+    item.innerHTML = `<span class="dd-flag">${inst.flag}</span><span class="dd-label">${inst.label}</span>`;
+    if (inst.url === activeInstance) item.classList.add('active');
+    item.addEventListener('click', () => {
+      selectInstance(inst.url, inst.label, inst.flag);
+      closeDropdown();
+    });
+    list.appendChild(item);
+  });
+
+  // Trigger toggle
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = wrapper.classList.contains('open');
+    isOpen ? closeDropdown() : openDropdown();
+  });
+
+  document.addEventListener('click', closeDropdown);
 }
 
-function onInstanceChange() {
+function openDropdown() {
+  const wrapper = $('instance-dropdown-wrapper');
+  if (!wrapper) return;
+  wrapper.classList.add('open');
+  // Scroll active item into view
+  const activeItem = wrapper.querySelector('.dd-item.active');
+  if (activeItem) {
+    setTimeout(() => activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
+  }
+}
+
+function closeDropdown() {
+  const wrapper = $('instance-dropdown-wrapper');
+  if (wrapper) wrapper.classList.remove('open');
+}
+
+function selectInstance(url, label, flag) {
+  activeInstance = url;
+  // Update trigger text
+  const triggerLabel = document.querySelector('.dd-trigger-label');
+  const triggerFlag  = document.querySelector('.dd-trigger-flag');
+  if (triggerLabel) triggerLabel.textContent = label;
+  if (triggerFlag)  triggerFlag.textContent  = flag;
+  // Update active class in list
+  document.querySelectorAll('.dd-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.url === url);
+  });
+  // Reset home grid so it reloads
   $('home-grid').innerHTML = '';
   setInstanceStatus('checking');
 }
 
-// ── Core fetch with auto-fallback across all instances ────
+function updateDropdownActive(url) {
+  const inst = ALL_INSTANCES.find(i => i.url === url);
+  if (!inst) return;
+  selectInstance(url, inst.label, inst.flag);
+}
+
+/* ── Instance status indicator ── */
+function setInstanceStatus(state) {
+  const statusEl = $('instance-status');
+  if (!statusEl) return;
+  statusEl.className = 'instance-status-badge status-' + state;
+
+  const states = {
+    ok:       { dot: '', label: activeInstance ? new URL(activeInstance).hostname : 'Connected', tip: 'Instance is responding' },
+    error:    { dot: '', label: 'Unavailable',  tip: 'Instance unavailable — trying others' },
+    checking: { dot: '', label: 'Connecting…',  tip: 'Checking instance…' },
+    trying:   { dot: '', label: 'Trying next…', tip: 'Falling back to another instance' },
+  };
+
+  const s = states[state] || states.checking;
+  statusEl.innerHTML = `<span class="status-dot"></span><span class="status-label">${esc(s.label)}</span>`;
+  statusEl.title = s.tip;
+}
+
+/* ── Auto-fallback fetch ── */
 async function fetchWithFallback(path, params = {}) {
   if (!PROXY_BASE || PROXY_BASE.includes('YOUR-WORKER')) {
     throw new Error('PROXY_BASE not set — edit app.js and add your Cloudflare Worker URL.');
   }
 
-  const sel      = $('instance-sel');
-  const selected = sel?.value || ALL_INSTANCES[0];
-  const ordered  = [selected, ...ALL_INSTANCES.filter(u => u !== selected)];
+  const selected = activeInstance || ALL_INSTANCES[0].url;
+  const ordered  = [selected, ...ALL_INSTANCES.map(i=>i.url).filter(u => u !== selected)];
 
   let lastErr;
-  for (const instance of ordered) {
+  let tried = 0;
+  for (const instanceUrl of ordered) {
+    tried++;
+    if (tried > 1) {
+      setInstanceStatus('trying');
+      // Animate the dropdown to scroll to the new instance being tried
+      animateDropdownScroll(instanceUrl);
+      await delay(320); // brief pause so animation is visible
+    }
     try {
-      const data = await doFetch(instance, path, params);
-      if (sel && sel.value !== instance) {
-        sel.value = instance;
-        toast(`Switched to ${new URL(instance).hostname}`);
+      const data = await doFetch(instanceUrl, path, params);
+      if (instanceUrl !== activeInstance) {
+        updateDropdownActive(instanceUrl);
+        const inst = ALL_INSTANCES.find(i=>i.url===instanceUrl);
+        toast(`✓ Switched to ${inst ? inst.label : new URL(instanceUrl).hostname}`);
       }
       setInstanceStatus('ok');
       return data;
     } catch (e) {
       lastErr = e;
       if (e.name === 'AbortError') throw e;
+      // continue to next
     }
   }
   setInstanceStatus('error');
   throw lastErr || new Error('All Piped instances failed');
 }
 
-async function doFetch(instance, path, params) {
-  const targetUrl = new URL(instance + path);
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function animateDropdownScroll(url) {
+  // Visually flash the status and scroll list if open
+  const item = document.querySelector(`.dd-item[data-url="${CSS.escape(url)}"]`);
+  if (!item) return;
+  document.querySelectorAll('.dd-item').forEach(el => el.classList.remove('trying'));
+  item.classList.add('trying');
+  const list = document.querySelector('.dd-list');
+  if (list && $('instance-dropdown-wrapper')?.classList.contains('open')) {
+    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+async function doFetch(instanceUrl, path, params) {
+  const targetUrl = new URL(instanceUrl + path);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null) targetUrl.searchParams.set(k, v);
   });
@@ -140,11 +245,11 @@ async function doFetch(instance, path, params) {
     clearTimeout(timer);
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0, 120) : ''}`);
+      throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0,120) : ''}`);
     }
     const text = await res.text();
     if (text.trimStart().startsWith('<')) {
-      throw new Error('Instance returned HTML instead of JSON (bot-challenged or down)');
+      throw new Error('Instance returned HTML (bot-challenged or down)');
     }
     return JSON.parse(text);
   } catch (e) {
@@ -157,7 +262,7 @@ async function apiGet(path, params = {}) {
   return fetchWithFallback(path, params);
 }
 
-// ── Toast notification ───────────────────────────────────
+/* ── Toast ── */
 let toastTimer;
 function toast(msg) {
   const t = $('toast');
@@ -167,14 +272,15 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.add('hidden'), 4500);
 }
 
-// ── View switching ───────────────────────────────────────
+/* ── View switching ── */
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   $(id).classList.add('active');
+  document.body.classList.toggle('shorts-active', id === 'view-shorts');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// ── State boxes ──────────────────────────────────────────
+/* ── State boxes ── */
 function showState(boxId, type, msg, retryFn) {
   const box = $(boxId);
   box.className = 'state-box' + (type === 'error' ? ' error' : '');
@@ -188,10 +294,10 @@ function showState(boxId, type, msg, retryFn) {
 }
 function hideState(boxId) { $(boxId).classList.add('hidden'); }
 
-// ── HOME / TRENDING ──────────────────────────────────────
-// Piped: GET /trending?region=US → array of stream objects
+/* ── HOME / TRENDING ── */
 function navHome() {
   history.pushState({}, '', location.pathname);
+  setNavActive('nav-home');
   showView('view-home');
   if (!$('home-grid').children.length) loadTrending();
 }
@@ -212,8 +318,7 @@ async function loadTrending() {
   }
 }
 
-// ── SEARCH ───────────────────────────────────────────────
-// Piped: GET /search?q=...&filter=videos&nextpage=...
+/* ── SEARCH ── */
 function handleSearch(e) {
   e.preventDefault();
   const q = $('q').value.trim();
@@ -241,12 +346,11 @@ async function runSearch() {
   setInstanceStatus('checking');
 
   try {
-    const filter = $('type-sel').value;   // videos | channels | playlists | all
+    const filter = $('type-sel').value;
     const params = {
       q:      currentQuery,
       filter: filter === 'all' ? 'all' : filter,
     };
-    // Piped uses nextpage cursor for pagination
     if (currentNextpage && currentPage > 1) {
       params.nextpage = currentNextpage;
     }
@@ -254,7 +358,7 @@ async function runSearch() {
     const data = await apiGet('/search', params);
     hideState('search-state');
 
-    const items = data.items || data; // Piped returns { items, nextpage } or just []
+    const items = data.items || data;
     currentNextpage = data.nextpage || null;
 
     if (!items?.length) {
@@ -275,7 +379,6 @@ async function runSearch() {
 
 function changePage(delta) {
   if (delta < 0) {
-    // Piped doesn't support going back via cursor — reload from start
     currentPage     = Math.max(1, currentPage + delta);
     currentNextpage = null;
     if (currentPage === 1) { runSearch(); return; }
@@ -285,29 +388,21 @@ function changePage(delta) {
   window.scrollTo({ top: 0 });
 }
 
-// ── RENDER helpers ────────────────────────────────────────
+/* ── RENDER helpers ── */
 function renderGrid(containerId, items) {
   const grid = $(containerId);
   items.forEach(item => {
-    // Piped item types: stream (video), channel, playlist
     if (item.type === 'stream' || item.url?.includes('/watch')) {
       grid.appendChild(makeVideoCard(item));
     } else if (item.type === 'channel' || item.url?.includes('/channel')) {
       grid.appendChild(makeChannelCard(item));
     } else if (item.type === 'playlist') {
-      grid.appendChild(makeVideoCard(item)); // render playlist like a video card
+      grid.appendChild(makeVideoCard(item));
     }
   });
 }
 
 function makeVideoCard(v) {
-  // Piped field names differ from Invidious:
-  //   thumbnail  (not videoThumbnails array)
-  //   duration   (seconds, int)
-  //   views      (not viewCount)
-  //   uploadedDate (relative string, not unix)
-  //   uploader   (not author)
-  //   url        ("/watch?v=ID")
   const videoId = extractId(v.url);
   const thumb   = v.thumbnail || '';
   const dur     = fmtDuration(v.duration);
@@ -315,9 +410,13 @@ function makeVideoCard(v) {
   card.setAttribute('tabindex', '0');
   card.setAttribute('role', 'button');
   card.setAttribute('aria-label', v.title || 'Video');
+
+  const uploaderUrl = v.uploaderUrl || '';
+  const channelId   = uploaderUrl.replace('/channel/','');
+
   card.innerHTML = `
     <div class="thumb-wrap">
-      ${thumb ? `<img class="thumb" src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : ''}
+      ${thumb ? `<img class="thumb" src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : '<div class="thumb-placeholder"></div>'}
       ${dur ? `<span class="duration">${esc(dur)}</span>` : ''}
     </div>
     <div class="card-body">
@@ -329,6 +428,7 @@ function makeVideoCard(v) {
         ${v.uploaded ? `<span>${esc(fmtUploadedDate(v.uploaded))}</span>` : ''}
       </p>
     </div>`;
+
   if (videoId) {
     const go = () => loadVideo(videoId);
     card.addEventListener('click', go);
@@ -338,26 +438,25 @@ function makeVideoCard(v) {
 }
 
 function makeChannelCard(ch) {
-  // Piped channel fields: name, thumbnail, subscribers, description, url
   const thumb = ch.thumbnail || '';
   const card  = el('article', 'channel-card');
+  const subTxt = ch.subscribers > 0 ? fmtSubs(ch.subscribers) : '';
   card.innerHTML = `
     ${thumb ? `<img class="ch-card-avatar" src="${esc(thumb)}" alt="" loading="lazy" />` : '<div class="ch-card-avatar"></div>'}
-    <div>
+    <div class="ch-card-info">
       <p class="ch-card-name">${esc(ch.name || '')}</p>
-      <p class="ch-card-subs">${ch.subscribers > 0 ? fmtViews(ch.subscribers).replace(' views','') + ' subs' : ''}</p>
+      ${subTxt ? `<p class="ch-card-subs"><span class="sub-icon">👥</span>${esc(subTxt)}</p>` : ''}
+      ${ch.description ? `<p class="ch-card-desc">${esc(ch.description.slice(0,120))}${ch.description.length > 120 ? '…' : ''}</p>` : ''}
     </div>`;
   return card;
 }
 
-// ── WATCH / VIDEO ─────────────────────────────────────────
-// Piped: GET /streams/:videoId
+/* ── WATCH / VIDEO ── */
 function loadVideo(videoId) {
   currentVideo = videoId;
   history.pushState({}, '', `?v=${videoId}`);
   showView('view-watch');
 
-  // Embed immediately via YouTube nocookie (no proxy needed for playback)
   $('player-wrap').innerHTML = '';
   const iframe       = document.createElement('iframe');
   iframe.src         = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
@@ -375,10 +474,6 @@ function loadVideo(videoId) {
 
 async function fetchVideoMeta(videoId) {
   try {
-    // Piped /streams/:videoId response fields:
-    //   title, description, views, likes, uploader, uploaderUrl,
-    //   uploaderAvatar, uploaderSubscriberCount, uploadDate,
-    //   relatedStreams[], thumbnailUrl, duration
     const v = await apiGet(`/streams/${videoId}`);
 
     $('v-title').textContent = v.title || '';
@@ -386,17 +481,22 @@ async function fetchVideoMeta(videoId) {
     $('v-date').textContent  = v.uploadDate ? new Date(v.uploadDate).toLocaleDateString() : '';
     $('v-desc').textContent  = v.description || 'No description.';
 
+    // Likes
     if (v.likes > 0) {
-      $('v-likes').textContent = '👍 ' + fmtViews(v.likes).replace(' views', '');
+      $('v-likes').innerHTML = `<span class="likes-thumb">👍</span>${fmtCount(v.likes)}`;
       $('v-likes').classList.remove('hidden');
     } else {
       $('v-likes').classList.add('hidden');
     }
 
+    // Channel info with subscriber count
     $('ch-name').textContent = v.uploader || '';
-    $('ch-subs').textContent = v.uploaderSubscriberCount > 0
-      ? fmtViews(v.uploaderSubscriberCount).replace(' views', '') + ' subscribers'
-      : '';
+    const subCount = v.uploaderSubscriberCount;
+    if (subCount > 0) {
+      $('ch-subs').innerHTML = `<span class="sub-icon">👥</span>${fmtSubs(subCount)}`;
+    } else {
+      $('ch-subs').textContent = '';
+    }
 
     $('ch-avatar').innerHTML = v.uploaderAvatar
       ? `<img src="${esc(v.uploaderAvatar)}" alt="" loading="lazy" />`
@@ -404,7 +504,6 @@ async function fetchVideoMeta(videoId) {
 
     $('video-meta').classList.remove('hidden');
 
-    // Related streams — Piped calls them relatedStreams
     if (v.relatedStreams?.length) {
       v.relatedStreams.slice(0, 15).forEach(r => {
         $('related').appendChild(makeRelatedCard(r));
@@ -435,20 +534,241 @@ function makeRelatedCard(v) {
   return card;
 }
 
-// ── URL routing ──────────────────────────────────────────
+/* ══════════════════════════════════════════════════════════
+   SHORTS
+   ══════════════════════════════════════════════════════════ */
+
+function isShort(v) {
+  // Shorts are ≤ 60 seconds. Piped includes them in trending/search.
+  return v.duration > 0 && v.duration <= 60;
+}
+
+function navShorts() {
+  history.pushState({}, '', '?shorts=1');
+  setNavActive('nav-shorts');
+  showView('view-shorts');
+  if (shortsItems.length === 0) loadShorts();
+}
+
+function setNavActive(activeId) {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const btn = $(activeId);
+  if (btn) btn.classList.add('active');
+}
+
+async function loadShorts() {
+  if (shortsLoading) return;
+  shortsLoading = true;
+  showState('shorts-state', 'loading', 'Loading Shorts…');
+  setInstanceStatus('checking');
+
+  try {
+    // Fetch trending and filter to shorts (≤60s)
+    // We may need multiple pages to collect enough shorts
+    let collected = [];
+    let nextpage  = null;
+    let attempts  = 0;
+
+    while (collected.length < 10 && attempts < 4) {
+      attempts++;
+      const params = { region: shortsRegion };
+      // Piped trending doesn't have nextpage, so try search as backup
+      let data;
+      if (attempts === 1) {
+        data = await apiGet('/trending', params);
+        if (Array.isArray(data)) {
+          collected.push(...data.filter(isShort));
+        }
+      } else {
+        // Fall back to searching "#shorts" for more content
+        const sParams = { q: '#shorts', filter: 'videos' };
+        if (nextpage) sParams.nextpage = nextpage;
+        data = await apiGet('/search', sParams);
+        const items = data.items || [];
+        nextpage = data.nextpage || null;
+        collected.push(...items.filter(isShort));
+        if (!nextpage) break;
+      }
+    }
+
+    if (!collected.length) {
+      showState('shorts-state', 'empty', 'No Shorts found. Try a different region.');
+      shortsLoading = false;
+      return;
+    }
+
+    hideState('shorts-state');
+    shortsItems   = collected;
+    shortsIndex   = 0;
+    shortsNextpage = nextpage;
+
+    renderShortsItem(0, true);
+    updateShortsNav();
+  } catch (e) {
+    showState('shorts-state', 'error', e.message, loadShorts);
+  } finally {
+    shortsLoading = false;
+  }
+}
+
+function renderShortsItem(idx, instant = false) {
+  const feed    = $('shorts-feed');
+  const sidebar = $('shorts-sidebar');
+  if (!feed || !sidebar) return;
+
+  const v = shortsItems[idx];
+  if (!v) return;
+
+  const videoId = extractId(v.url);
+  const thumb   = v.thumbnail || '';
+
+  // Build card HTML
+  feed.innerHTML = `
+    <div class="shorts-card ${instant ? '' : 'shorts-enter'}" id="shorts-card">
+      <div class="shorts-player-wrap" id="shorts-player-wrap">
+        ${thumb ? `<img class="shorts-thumb" id="shorts-thumb" src="${esc(thumb)}" alt="" />` : ''}
+        <button class="shorts-play-overlay" id="shorts-play-btn" onclick="playShort('${esc(videoId)}')" aria-label="Play">
+          <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+            <circle cx="22" cy="22" r="22" fill="rgba(0,0,0,0.55)"/>
+            <polygon points="17,13 35,22 17,31" fill="white"/>
+          </svg>
+        </button>
+        <div id="shorts-iframe-wrap" class="shorts-iframe-wrap hidden"></div>
+      </div>
+      <div class="shorts-info">
+        <p class="shorts-title">${esc(v.title || '')}</p>
+        <p class="shorts-channel">${esc(v.uploader || v.uploaderName || '')}</p>
+        <p class="shorts-meta">${fmtViews(v.views)}${v.uploadedDate ? ' · ' + esc(v.uploadedDate) : ''}</p>
+      </div>
+      <div class="shorts-counter">${idx + 1} / ${shortsItems.length}</div>
+    </div>`;
+
+  // Sidebar actions
+  sidebar.innerHTML = `
+    <div class="shorts-actions">
+      <button class="short-action-btn" onclick="playShort('${esc(videoId)}')" title="Play">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        <span>Play</span>
+      </button>
+      <button class="short-action-btn" onclick="loadVideo('${esc(videoId)}')" title="Full page">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 3 9 9 3 9"/></svg>
+        <span>Expand</span>
+      </button>
+      <a class="short-action-btn" href="https://www.youtube.com/shorts/${esc(videoId)}" target="_blank" rel="noopener" title="Open on YouTube">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+        <span>YouTube</span>
+      </a>
+      <div class="short-action-divider"></div>
+      <span class="short-action-label">${fmtDuration(v.duration)}</span>
+    </div>`;
+
+  // Preload next if close to end
+  if (idx >= shortsItems.length - 3) preloadMoreShorts();
+}
+
+function playShort(videoId) {
+  const iWrap  = $('shorts-iframe-wrap');
+  const playBtn = $('shorts-play-btn');
+  const thumb  = $('shorts-thumb');
+  if (!iWrap) return;
+
+  iWrap.innerHTML = `<iframe
+    src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&loop=1&playlist=${videoId}"
+    allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+    allowfullscreen title="Short video player"></iframe>`;
+
+  iWrap.classList.remove('hidden');
+  if (playBtn) playBtn.style.display = 'none';
+  if (thumb)   thumb.style.display   = 'none';
+}
+
+function shortsNav(dir) {
+  if (shortsIsTransitioning) return;
+  const newIdx = shortsIndex + dir;
+  if (newIdx < 0 || newIdx >= shortsItems.length) return;
+
+  shortsIsTransitioning = true;
+  shortsIndex = newIdx;
+
+  // Stop any playing iframe first
+  const iWrap = $('shorts-iframe-wrap');
+  if (iWrap) iWrap.innerHTML = '';
+
+  renderShortsItem(shortsIndex);
+  updateShortsNav();
+
+  setTimeout(() => { shortsIsTransitioning = false; }, 340);
+}
+
+function updateShortsNav() {
+  const up   = $('shorts-up');
+  const down = $('shorts-down');
+  if (up)   up.disabled   = shortsIndex <= 0;
+  if (down) down.disabled = shortsIndex >= shortsItems.length - 1;
+}
+
+async function preloadMoreShorts() {
+  if (shortsLoading || !shortsNextpage) return;
+  shortsLoading = true;
+  try {
+    const data  = await apiGet('/search', { q: '#shorts', filter: 'videos', nextpage: shortsNextpage });
+    const items = (data.items || []).filter(isShort);
+    shortsNextpage = data.nextpage || null;
+    shortsItems.push(...items);
+    updateShortsNav();
+    // Refresh counter
+    const counter = document.querySelector('.shorts-counter');
+    if (counter) counter.textContent = `${shortsIndex + 1} / ${shortsItems.length}`;
+  } catch (_) { /* silent */ }
+  finally { shortsLoading = false; }
+}
+
+/* Keyboard navigation for Shorts */
+document.addEventListener('keydown', e => {
+  if (!$('view-shorts')?.classList.contains('active')) return;
+  if (e.key === 'ArrowUp'   || e.key === 'k') { e.preventDefault(); shortsNav(-1); }
+  if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); shortsNav(1); }
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    const v = shortsItems[shortsIndex];
+    if (v) playShort(extractId(v.url));
+  }
+});
+
+/* Touch swipe for Shorts */
+(function() {
+  let touchStartY = 0;
+  document.addEventListener('touchstart', e => {
+    if (!$('view-shorts')?.classList.contains('active')) return;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (!$('view-shorts')?.classList.contains('active')) return;
+    const dy = touchStartY - e.changedTouches[0].clientY;
+    if (Math.abs(dy) > 60) shortsNav(dy > 0 ? 1 : -1);
+  }, { passive: true });
+})();
+
+/* ── URL routing ── */
 function route() {
   const p = new URLSearchParams(location.search);
   const v = p.get('v');
   const q = p.get('q');
+  const s = p.get('shorts');
   if (v) {
+    setNavActive('nav-home');
     loadVideo(v);
   } else if (q) {
+    setNavActive('nav-home');
     $('q').value    = q;
     currentQuery    = q;
     currentNextpage = null;
     showView('view-search');
     runSearch();
+  } else if (s) {
+    navShorts();
   } else {
+    setNavActive('nav-home');
     showView('view-home');
     loadTrending();
   }
@@ -456,5 +776,9 @@ function route() {
 
 window.addEventListener('popstate', route);
 
-// ── Boot ─────────────────────────────────────────────────
-route();
+/* ── Boot ── */
+document.addEventListener('DOMContentLoaded', () => {
+  buildInstanceDropdown();
+  setInstanceStatus('checking');
+  route();
+});
