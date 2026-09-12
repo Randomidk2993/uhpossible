@@ -12,6 +12,18 @@ const PROXY_BASE = 'https://lucky-sun-99ea.xxgoldenwarriors.workers.dev';
 
 /* ───────────────────────────────────────────────────────── */
 
+// ── Invidious instances (ordered by preference) ──────────
+// Official public list as of Sept 2026: https://docs.invidious.io/instances/
+const ALL_INSTANCES = [
+  'https://inv.nadeko.net',          // 🇨🇱 Chile
+  'https://invidious.nerdvpn.de',    // 🇺🇦 Ukraine
+  'https://yt.chocolatemoo53.com',   // 🇺🇸 US
+  'https://invidious.tiekoetter.com',// 🇩🇪 Germany
+  'https://invidious.f5.si',         // 🇯🇵 Japan
+  'https://inv.zoomerville.com',     // 🇺🇸 US
+  'https://inv.thepixora.com',       // 🌐 Cloudflare
+];
+
 // ── State ────────────────────────────────────────────────
 let currentQuery = '';
 let currentPage  = 1;
@@ -70,13 +82,58 @@ function esc(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ── API via Cloudflare Worker proxy ──────────────────────
-async function apiGet(path, params = {}) {
+// ── Instance status indicator ─────────────────────────────
+function setInstanceStatus(state) {
+  // state: 'ok' | 'error' | 'checking'
+  const el = $('instance-status');
+  if (!el) return;
+  const map = { ok: '🟢', error: '🔴', checking: '🟡' };
+  el.textContent = map[state] || '';
+  el.title = state === 'ok' ? 'Instance is responding'
+           : state === 'error' ? 'Instance unavailable'
+           : 'Checking instance…';
+}
+
+// Called when user manually changes the instance dropdown
+function onInstanceChange() {
+  // Reset home grid so it reloads with the new instance
+  $('home-grid').innerHTML = '';
+  setInstanceStatus('checking');
+}
+
+// ── Auto-fallback: try instances until one works ──────────
+async function fetchWithFallback(path, params = {}) {
   if (!PROXY_BASE || PROXY_BASE.includes('YOUR-WORKER')) {
     throw new Error('PROXY_BASE not set — edit app.js and add your Cloudflare Worker URL.');
   }
 
-  const instance = $('instance-sel').value;
+  const sel = $('instance-sel');
+  // Build ordered list: selected instance first, then the rest
+  const selected = sel?.value || ALL_INSTANCES[0];
+  const ordered  = [selected, ...ALL_INSTANCES.filter(u => u !== selected)];
+
+  let lastErr;
+  for (const instance of ordered) {
+    try {
+      const data = await doFetch(instance, path, params);
+      // Success — update the dropdown to reflect the working instance
+      if (sel && sel.value !== instance) {
+        sel.value = instance;
+        toast(`Switched to ${new URL(instance).hostname}`);
+      }
+      setInstanceStatus('ok');
+      return data;
+    } catch (e) {
+      lastErr = e;
+      // Don't bother trying more if it was a deliberate abort
+      if (e.name === 'AbortError') throw e;
+    }
+  }
+  setInstanceStatus('error');
+  throw lastErr || new Error('All instances failed');
+}
+
+async function doFetch(instance, path, params) {
   const targetUrl = new URL(instance + path);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null) targetUrl.searchParams.set(k, v);
@@ -85,7 +142,7 @@ async function apiGet(path, params = {}) {
   const proxyUrl = new URL(PROXY_BASE);
   proxyUrl.searchParams.set('url', targetUrl.toString());
 
-  const ctrl = new AbortController();
+  const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 14_000);
 
   try {
@@ -95,11 +152,21 @@ async function apiGet(path, params = {}) {
       const body = await res.text().catch(() => '');
       throw new Error(`HTTP ${res.status}${body ? ': ' + body.slice(0,120) : ''}`);
     }
-    return await res.json();
+    // Guard against HTML error pages masquerading as 200 OK
+    const text = await res.text();
+    if (text.trimStart().startsWith('<')) {
+      throw new Error('Instance returned HTML instead of JSON (likely down or rate-limited)');
+    }
+    return JSON.parse(text);
   } catch (e) {
     clearTimeout(timer);
     throw e;
   }
+}
+
+// Legacy wrapper kept for clarity — everything goes through fallback now
+async function apiGet(path, params = {}) {
+  return fetchWithFallback(path, params);
 }
 
 // ── Toast notification ───────────────────────────────────
@@ -143,6 +210,7 @@ function navHome() {
 async function loadTrending() {
   $('home-grid').innerHTML = '';
   showState('home-state', 'loading', 'Loading trending…');
+  setInstanceStatus('checking');
 
   try {
     const region = $('region-sel').value;
@@ -178,6 +246,7 @@ async function runSearch() {
   $('search-grid').innerHTML = '';
   $('pagination').classList.add('hidden');
   showState('search-state', 'loading', 'Searching…');
+  setInstanceStatus('checking');
 
   try {
     const sort = $('sort-sel').value;
