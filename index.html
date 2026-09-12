@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Viewtube</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -10,140 +10,129 @@
 </head>
 <body>
 
-  <!-- Header -->
   <header class="header">
-    <a href="/" class="logo" onclick="showHome(); return false;">
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <rect width="28" height="28" rx="6" fill="#FF3B30"/>
-        <polygon points="11,8 22,14 11,20" fill="white"/>
+    <button class="logo" onclick="navHome()" aria-label="Home">
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <rect width="26" height="26" rx="6" fill="#FF3B30"/>
+        <polygon points="10,7 21,13 10,19" fill="white"/>
       </svg>
-      <span>Viewtube</span>
-    </a>
+      <span class="logo-text">Viewtube</span>
+    </button>
 
-    <form class="search-form" onsubmit="handleSearch(event)">
-      <input
-        id="search-input"
-        class="search-input"
-        type="search"
-        placeholder="Search videos…"
-        autocomplete="off"
-        spellcheck="false"
-      />
+    <form class="search-form" onsubmit="handleSearch(event)" role="search">
+      <input id="q" class="search-input" type="search"
+        placeholder="Search…" autocomplete="off" spellcheck="false"
+        aria-label="Search videos" />
       <button class="search-btn" type="submit" aria-label="Search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
       </button>
     </form>
 
-    <div class="instance-wrap">
-      <label for="instance-select" class="instance-label">Instance</label>
-      <select id="instance-select" class="instance-select" onchange="onInstanceChange()">
+    <div class="header-right">
+      <label class="hdr-label" for="instance-sel">Instance</label>
+      <select id="instance-sel" class="sel" aria-label="Invidious instance">
         <option value="https://yewtu.be">yewtu.be</option>
-        <option value="https://inv.nadeko.net">inv.nadeko.net</option>
-        <option value="https://invidious.nerdvpn.de">invidious.nerdvpn.de</option>
-        <option value="https://iv.melmac.space">iv.melmac.space</option>
-        <option value="https://invidious.privacyredirect.com">privacyredirect.com</option>
+        <option value="https://invidious.jing.rocks">jing.rocks</option>
+        <option value="https://inv.tux.pizza">tux.pizza</option>
+        <option value="https://invidious.privacydev.net">privacydev.net</option>
+        <option value="https://iv.datura.network">datura.network</option>
       </select>
     </div>
   </header>
 
-  <!-- Main content area -->
+  <!-- Toast for errors/notices -->
+  <div id="toast" class="toast hidden" role="alert" aria-live="polite"></div>
+
   <main id="app">
 
-    <!-- Home / trending view -->
-    <section id="view-home" class="view active">
-      <div class="section-header">
-        <h2 class="section-title">Trending</h2>
-        <select id="region-select" class="region-select" onchange="loadTrending()">
-          <option value="US">United States</option>
-          <option value="GB">United Kingdom</option>
-          <option value="CA">Canada</option>
-          <option value="AU">Australia</option>
-          <option value="DE">Germany</option>
-          <option value="FR">France</option>
-          <option value="JP">Japan</option>
-          <option value="IN">India</option>
-          <option value="BR">Brazil</option>
+    <!-- Home / Trending -->
+    <section id="view-home" class="view active" aria-label="Trending">
+      <div class="section-head">
+        <h2 class="sec-title">Trending</h2>
+        <select id="region-sel" class="sel sm" onchange="loadTrending()" aria-label="Region">
+          <option value="US">🇺🇸 US</option>
+          <option value="GB">🇬🇧 UK</option>
+          <option value="CA">🇨🇦 CA</option>
+          <option value="AU">🇦🇺 AU</option>
+          <option value="DE">🇩🇪 DE</option>
+          <option value="FR">🇫🇷 FR</option>
+          <option value="JP">🇯🇵 JP</option>
+          <option value="IN">🇮🇳 IN</option>
+          <option value="BR">🇧🇷 BR</option>
         </select>
       </div>
-      <div id="trending-grid" class="video-grid"></div>
-      <div id="trending-loading" class="loading-state">
-        <div class="spinner"></div>
-        <p>Loading trending videos…</p>
+      <div id="home-grid" class="video-grid"></div>
+      <div id="home-state" class="state-box">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading trending…</p>
       </div>
-      <div id="trending-error" class="error-state hidden"></div>
     </section>
 
-    <!-- Search results view -->
-    <section id="view-search" class="view">
-      <div class="section-header">
-        <h2 id="search-heading" class="section-title"></h2>
-        <div class="search-filters">
-          <select id="sort-select" class="region-select" onchange="rerunSearch()">
+    <!-- Search results -->
+    <section id="view-search" class="view" aria-label="Search results">
+      <div class="section-head">
+        <h2 id="search-heading" class="sec-title"></h2>
+        <div class="filter-row">
+          <select id="sort-sel" class="sel sm" onchange="rerunSearch()" aria-label="Sort by">
             <option value="relevance">Relevance</option>
             <option value="rating">Rating</option>
-            <option value="upload_date">Upload date</option>
-            <option value="view_count">View count</option>
+            <option value="upload_date">Newest</option>
+            <option value="view_count">Most viewed</option>
           </select>
-          <select id="type-select" class="region-select" onchange="rerunSearch()">
+          <select id="type-sel" class="sel sm" onchange="rerunSearch()" aria-label="Content type">
             <option value="video">Videos</option>
             <option value="channel">Channels</option>
-            <option value="playlist">Playlists</option>
             <option value="all">All</option>
           </select>
         </div>
       </div>
       <div id="search-grid" class="video-grid"></div>
-      <div id="search-loading" class="loading-state hidden">
-        <div class="spinner"></div>
-        <p>Searching…</p>
-      </div>
-      <div id="search-error" class="error-state hidden"></div>
-      <div id="search-pagination" class="pagination hidden">
-        <button id="prev-page-btn" class="page-btn" onclick="changePage(-1)" disabled>← Prev</button>
-        <span id="page-indicator" class="page-num">Page 1</span>
-        <button id="next-page-btn" class="page-btn" onclick="changePage(1)">Next →</button>
-      </div>
+      <div id="search-state" class="state-box hidden"></div>
+      <nav id="pagination" class="pagination hidden" aria-label="Search pages">
+        <button id="btn-prev" class="page-btn" onclick="changePage(-1)" disabled>← Prev</button>
+        <span id="page-lbl" class="page-lbl">Page 1</span>
+        <button id="btn-next" class="page-btn" onclick="changePage(1)">Next →</button>
+      </nav>
     </section>
 
-    <!-- Watch view -->
-    <section id="view-watch" class="view">
+    <!-- Watch -->
+    <section id="view-watch" class="view" aria-label="Video player">
       <div class="watch-layout">
         <div class="watch-main">
-          <div id="player-area" class="player-area">
-            <div id="player-loading" class="player-loading">
-              <div class="spinner large"></div>
-            </div>
+          <div id="player-wrap" class="player-wrap">
+            <div class="spinner large" id="player-spin" aria-label="Loading video"></div>
           </div>
           <div id="video-meta" class="video-meta hidden">
-            <h1 id="video-title" class="video-title"></h1>
-            <div class="video-stats">
-              <span id="video-views"></span>
-              <span id="video-date"></span>
-              <span id="video-likes" class="likes-badge"></span>
+            <h1 id="v-title" class="v-title"></h1>
+            <div class="v-stats">
+              <span id="v-views"></span>
+              <span id="v-date"></span>
+              <span id="v-likes" class="likes-pill hidden"></span>
             </div>
-            <a id="channel-link" href="#" class="channel-link" onclick="return false;">
-              <div id="channel-avatar" class="channel-avatar"></div>
+            <a id="ch-link" class="ch-link" href="#" onclick="return false;">
+              <div id="ch-avatar" class="ch-avatar" aria-hidden="true"></div>
               <div>
-                <p id="channel-name" class="channel-name"></p>
-                <p id="channel-subs" class="channel-subs"></p>
+                <p id="ch-name" class="ch-name"></p>
+                <p id="ch-subs" class="ch-subs"></p>
               </div>
             </a>
-            <details class="description-wrap">
-              <summary class="description-toggle">Description</summary>
-              <p id="video-description" class="video-description"></p>
+            <details class="desc-wrap">
+              <summary class="desc-toggle">Description</summary>
+              <div id="v-desc" class="v-desc"></div>
             </details>
-            <a id="watch-on-yt" href="#" target="_blank" rel="noopener noreferrer" class="yt-link">
+            <a id="yt-link" href="#" target="_blank" rel="noopener noreferrer" class="yt-link">
               Watch on YouTube ↗
             </a>
           </div>
         </div>
-        <aside class="watch-sidebar">
-          <h3 class="sidebar-title">Related</h3>
-          <div id="related-list" class="related-list"></div>
-          <div id="related-loading" class="loading-state small">
-            <div class="spinner small"></div>
+        <aside class="watch-aside" aria-label="Related videos">
+          <p class="aside-title">Up next</p>
+          <div id="related" class="related-list"></div>
+          <div id="related-state" class="state-box small hidden">
+            <div class="spinner small" aria-hidden="true"></div>
           </div>
         </aside>
       </div>
@@ -152,7 +141,9 @@
   </main>
 
   <footer class="footer">
-    <p>Viewtube uses <a href="https://invidious.io" target="_blank" rel="noopener">Invidious</a> public instances to access YouTube content. All videos © their respective owners. Not affiliated with YouTube or Google.</p>
+    Videos play via YouTube's official embed player.
+    Metadata via public <a href="https://invidious.io" target="_blank" rel="noopener">Invidious</a> instances.
+    All content © respective owners. Not affiliated with YouTube or Google.
   </footer>
 
   <script src="app.js"></script>
