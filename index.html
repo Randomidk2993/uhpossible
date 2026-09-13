@@ -157,27 +157,14 @@
     </section>
 
     <!-- Shorts -->
-    <section id="view-shorts" class="view" aria-label="Shorts">
-      <div class="shorts-shell">
-        <!-- Left: video column -->
-        <div class="shorts-col" id="shorts-col">
-          <div id="shorts-state" class="state-box hidden"></div>
-          <div id="shorts-feed" class="shorts-feed"></div>
-        </div>
-
-        <!-- Right: action sidebar (populated by JS) -->
-        <div class="shorts-sidebar" id="shorts-sidebar">
-          <div class="shorts-actions-placeholder"></div>
+    <section id="view-shorts" aria-label="Shorts">
+      <div class="shorts-scroller" id="shorts-scroller">
+        <!-- items injected by JS -->
+        <div class="shorts-placeholder" id="shorts-placeholder">
+          <div class="spinner large"></div>
+          <p>Finding Shorts…</p>
         </div>
       </div>
-
-      <!-- Nav arrows -->
-      <button class="shorts-nav-btn shorts-nav-up" id="shorts-up" onclick="shortsNav(-1)" aria-label="Previous short">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
-      </button>
-      <button class="shorts-nav-btn shorts-nav-down" id="shorts-down" onclick="shortsNav(1)" aria-label="Next short">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
     </section>
 
   </main>
