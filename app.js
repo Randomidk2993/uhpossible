@@ -538,10 +538,35 @@ function makeRelatedCard(v) {
    SHORTS
    ══════════════════════════════════════════════════════════ */
 
-function isShort(v) {
-  // Shorts are ≤ 60 seconds. Piped includes them in trending/search.
-  return v.duration > 0 && v.duration <= 60;
+// Piped does not expose a dedicated Shorts endpoint.
+// The most reliable approach: search "#shorts", take ALL video results
+// (Piped search for #shorts returns almost exclusively actual Shorts),
+// then fall back to trending if that yields nothing.
+// Duration filtering is intentionally skipped here because Piped
+// frequently returns 0 or wrong durations for Shorts.
+function looksLikeShort(v) {
+  if (!v || !v.url) return false;
+  return v.url.includes('/watch');
 }
+
+function dedupByVideoId(arr) {
+  const seen = new Set();
+  return arr.filter(v => {
+    const id = extractId(v.url);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+// Multiple queries — Piped instances handle some better than others
+const SHORTS_QUERIES = [
+  '#shorts',
+  '#short',
+  'shorts 2025',
+  'funny shorts',
+  'viral shorts',
+];
 
 function navShorts() {
   history.pushState({}, '', '?shorts=1');
@@ -559,51 +584,56 @@ function setNavActive(activeId) {
 async function loadShorts() {
   if (shortsLoading) return;
   shortsLoading = true;
-  showState('shorts-state', 'loading', 'Loading Shorts…');
+  showState('shorts-state', 'loading', 'Finding Shorts…');
   setInstanceStatus('checking');
 
-  try {
-    // Fetch trending and filter to shorts (≤60s)
-    // We may need multiple pages to collect enough shorts
-    let collected = [];
-    let nextpage  = null;
-    let attempts  = 0;
+  const collected = [];
+  let gotAny = false;
 
-    while (collected.length < 10 && attempts < 4) {
-      attempts++;
-      const params = { region: shortsRegion };
-      // Piped trending doesn't have nextpage, so try search as backup
-      let data;
-      if (attempts === 1) {
-        data = await apiGet('/trending', params);
-        if (Array.isArray(data)) {
-          collected.push(...data.filter(isShort));
+  try {
+    // Strategy A: search each query, stop once we have ≥20 results
+    for (const q of SHORTS_QUERIES) {
+      if (collected.length >= 20) break;
+      try {
+        const data  = await apiGet('/search', { q, filter: 'videos' });
+        const items = (data.items || []).filter(v => v.url && v.url.includes('/watch'));
+        if (items.length) {
+          collected.push(...items);
+          gotAny = true;
+          // Save nextpage from the best query for infinite-scroll later
+          if (!shortsNextpage && data.nextpage) shortsNextpage = data.nextpage;
         }
-      } else {
-        // Fall back to searching "#shorts" for more content
-        const sParams = { q: '#shorts', filter: 'videos' };
-        if (nextpage) sParams.nextpage = nextpage;
-        data = await apiGet('/search', sParams);
-        const items = data.items || [];
-        nextpage = data.nextpage || null;
-        collected.push(...items.filter(isShort));
-        if (!nextpage) break;
+      } catch (e) {
+        // silently try next query
       }
     }
 
-    if (!collected.length) {
-      showState('shorts-state', 'empty', 'No Shorts found. Try a different region.');
-      shortsLoading = false;
+    // Strategy B: fall back to all trending videos if search yielded nothing
+    if (!gotAny) {
+      try {
+        const data = await apiGet('/trending', { region: shortsRegion });
+        if (Array.isArray(data)) {
+          collected.push(...data.filter(v => v.url && v.url.includes('/watch')));
+          gotAny = collected.length > 0;
+        }
+      } catch (_) {}
+    }
+
+    const unique = dedupByVideoId(collected);
+
+    if (!unique.length) {
+      showState('shorts-state', 'error',
+        'Could not load Shorts — the current Piped instance may be down or rate-limiting requests. Try switching instances using the dropdown at the top.',
+        loadShorts);
       return;
     }
 
     hideState('shorts-state');
-    shortsItems   = collected;
-    shortsIndex   = 0;
-    shortsNextpage = nextpage;
-
+    shortsItems = unique;
+    shortsIndex = 0;
     renderShortsItem(0, true);
     updateShortsNav();
+
   } catch (e) {
     showState('shorts-state', 'error', e.message, loadShorts);
   } finally {
@@ -712,7 +742,7 @@ async function preloadMoreShorts() {
   shortsLoading = true;
   try {
     const data  = await apiGet('/search', { q: '#shorts', filter: 'videos', nextpage: shortsNextpage });
-    const items = (data.items || []).filter(isShort);
+    const items = (data.items || []).filter(v => v.url && v.url.includes('/watch'));
     shortsNextpage = data.nextpage || null;
     shortsItems.push(...items);
     updateShortsNav();
