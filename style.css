@@ -520,158 +520,180 @@ details[open] .desc-toggle::before { content: '▾ '; }
   border-color: var(--border);
 }
 
-/* ─── Shorts shell ────────────────────────────────────── */
+/* ─── Shorts: full-viewport scroll-snap feed ─────────────── */
+
+/* The view itself becomes the scroll container */
 #view-shorts {
-  position: relative;
+  position: fixed;
+  inset: var(--hdr) 0 0 0;
+  overflow: hidden;
+  display: none;
 }
+#view-shorts.active { display: block; }
 
-.shorts-shell {
+/* Scroll container: snaps each item to full height */
+.shorts-scroller {
+  width: 100%;
+  height: 100%;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+/* Hide scrollbar but keep scrolling */
+.shorts-scroller::-webkit-scrollbar { display: none; }
+.shorts-scroller { scrollbar-width: none; }
+
+/* Each short occupies exactly one screen */
+.short-item {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
   display: flex;
+  align-items: center;
   justify-content: center;
-  align-items: flex-start;
-  gap: 20px;
-  min-height: calc(100dvh - var(--hdr) - 60px);
-  padding-top: 8px;
-}
-
-/* ─── Shorts feed column ──────────────────────────────── */
-.shorts-col {
-  flex-shrink: 0;
-  width: 400px;
-  max-width: 100%;
-}
-
-.shorts-feed {
-  width: 100%;
-}
-
-/* ─── Shorts card ─────────────────────────────────────── */
-.shorts-card {
-  position: relative;
-  width: 100%;
-  border-radius: 16px;
-  overflow: hidden;
-  background: var(--surf);
-  border: 1px solid var(--border);
-  box-shadow: 0 12px 40px rgba(0,0,0,.5);
-}
-
-.shorts-card.shorts-enter {
-  animation: shorts-slide-in .28s cubic-bezier(.22,.68,0,1.2) both;
-}
-@keyframes shorts-slide-in {
-  from { opacity: 0; transform: translateY(32px) scale(.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-/* ─── Shorts player area ──────────────────────────────── */
-.shorts-player-wrap {
-  position: relative;
-  width: 100%;
-  /* 9:16 vertical ratio */
-  aspect-ratio: 9 / 16;
   background: #000;
-  overflow: hidden;
-  border-radius: 16px 16px 0 0;
+  flex-shrink: 0;
 }
 
-.shorts-thumb {
+/* Center column — phone-shaped */
+.short-inner {
+  position: relative;
+  height: 100%;
+  /* max width keeps the 9:16 feel on wide screens */
+  width: min(100%, calc(100vh * 9 / 16));
+  background: #000;
+}
+
+/* Thumbnail fills the inner area */
+.short-thumb {
+  position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.shorts-play-overlay {
+/* Gradient overlay for text legibility */
+.short-inner::after {
+  content: '';
   position: absolute; inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(0,0,0,.75) 0%,
+    rgba(0,0,0,.2) 35%,
+    transparent 65%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Big centered play button */
+.short-play-btn {
+  position: absolute; inset: 0; z-index: 2;
   display: flex; align-items: center; justify-content: center;
   background: none; border: none; cursor: pointer;
-  transition: opacity .15s;
 }
-.shorts-play-overlay:hover { opacity: .85; }
+.short-play-icon {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+  transition: transform .15s, background .15s;
+}
+.short-play-btn:hover .short-play-icon {
+  transform: scale(1.1);
+  background: rgba(0,0,0,.65);
+}
 
-.shorts-iframe-wrap {
-  position: absolute; inset: 0;
+/* Iframe replaces thumb when playing */
+.short-iframe-wrap {
+  position: absolute; inset: 0; z-index: 3;
+  display: none;
 }
-.shorts-iframe-wrap.hidden { display: none; }
-.shorts-iframe-wrap iframe {
+.short-iframe-wrap.active { display: block; }
+.short-iframe-wrap iframe {
   width: 100%; height: 100%; border: none;
 }
 
-/* ─── Shorts info bar ─────────────────────────────────── */
-.shorts-info {
-  padding: 12px 14px 10px;
+/* Info overlay — bottom of inner column */
+.short-info {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  z-index: 2; padding: 16px 14px 20px;
 }
-.shorts-title {
-  font-size: 13.5px; font-weight: 600; line-height: 1.35;
+.short-channel {
+  font-size: 13px; font-weight: 600; color: #fff;
+  margin-bottom: 4px; text-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+.short-title {
+  font-size: 12.5px; color: rgba(255,255,255,.9);
+  line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden; margin-bottom: 4px;
+  overflow: hidden;
+  text-shadow: 0 1px 4px rgba(0,0,0,.5);
 }
-.shorts-channel { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
-.shorts-meta    { font-size: 11px; color: var(--dim); }
-
-.shorts-counter {
-  position: absolute; top: 12px; right: 12px;
-  background: rgba(0,0,0,.6); color: #fff;
-  font-size: 11px; font-weight: 600; padding: 3px 8px;
-  border-radius: 10px; pointer-events: none;
+.short-meta {
+  font-size: 11px; color: rgba(255,255,255,.6);
+  margin-top: 4px;
 }
 
-/* ─── Shorts sidebar (actions) ────────────────────────── */
-.shorts-sidebar {
-  padding-top: 16px;
-  flex-shrink: 0;
+/* Duration badge — top-left */
+.short-duration {
+  position: absolute; top: 12px; left: 12px; z-index: 3;
+  background: rgba(0,0,0,.65); color: #fff;
+  font-size: 11px; font-weight: 700;
+  padding: 3px 7px; border-radius: 6px;
+  backdrop-filter: blur(4px);
 }
-.shorts-actions {
-  display: flex; flex-direction: column;
-  align-items: center; gap: 6px;
+
+/* Right-side action buttons */
+.short-actions {
+  position: absolute; right: -60px; bottom: 80px;
+  z-index: 3;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
 }
-.short-action-btn {
+.short-act {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
-  width: 54px; height: 54px; justify-content: center;
-  background: var(--surf2); border: 1px solid var(--border);
-  border-radius: 14px; color: var(--muted);
-  font-size: 10px; text-decoration: none;
-  cursor: pointer;
-  transition: color .15s, background .15s, border-color .15s, transform .1s;
+  background: none; border: none; color: #fff; cursor: pointer;
+  text-decoration: none; padding: 0;
+  transition: transform .15s;
 }
-.short-action-btn:hover {
-  color: var(--text); background: var(--surf3); border-color: var(--border2);
-  transform: scale(1.05);
-}
-.short-action-btn svg { flex-shrink: 0; }
-.short-action-btn span { font-size: 10px; }
-
-.short-action-divider {
-  width: 32px; height: 1px; background: var(--border);
-  margin: 4px 0;
-}
-.short-action-label {
-  font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
-/* ─── Shorts nav arrows ───────────────────────────────── */
-.shorts-nav-btn {
-  position: fixed; right: 24px;
-  width: 44px; height: 44px;
-  background: var(--surf2); border: 1px solid var(--border);
-  border-radius: 50%; color: var(--text);
+.short-act:hover { transform: scale(1.15); }
+.short-act-icon {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: rgba(255,255,255,.15);
+  backdrop-filter: blur(8px);
   display: flex; align-items: center; justify-content: center;
-  cursor: pointer; z-index: 30;
-  transition: background .15s, border-color .15s, opacity .15s, transform .1s;
-  box-shadow: 0 4px 14px rgba(0,0,0,.4);
 }
-.shorts-nav-btn:hover:not(:disabled) {
-  background: var(--surf3); border-color: var(--border2);
-  transform: scale(1.08);
-}
-.shorts-nav-btn:disabled { opacity: .25; cursor: not-allowed; }
-.shorts-nav-up   { bottom: 136px; }
-.shorts-nav-down { bottom: 80px; }
+.short-act span { font-size: 10px; color: rgba(255,255,255,.8); }
 
-/* Hide nav arrows when Shorts not active — toggled via .shorts-active on body */
-.shorts-nav-btn { display: none; }
-body.shorts-active .shorts-nav-btn { display: flex; }
+/* On narrower screens the right buttons fold inside the inner column */
+@media (max-width: 860px) {
+  .short-actions {
+    right: 8px;
+  }
+  .short-act-icon { width: 38px; height: 38px; }
+}
+
+/* Loading / empty state inside scroller */
+.shorts-placeholder {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  height: 100%; gap: 14px;
+  color: var(--muted); font-size: 14px; text-align: center; padding: 20px;
+}
+.shorts-placeholder .spinner { border-top-color: var(--red); }
+.shorts-placeholder strong { color: #ff7a73; font-size: 15px; }
+.shorts-placeholder .retry-btn { margin-top: 6px; }
+
+/* Override main padding so Shorts is truly full-bleed */
+body.shorts-active main { padding: 0; max-width: none; }
+body.shorts-active .footer { display: none; }
+
+/* Hide old nav arrows — navigation is now scroll-based */
+.shorts-nav-btn { display: none !important; }
+
 
 /* ─── Footer ──────────────────────────────────────────── */
 .footer {
