@@ -274,10 +274,21 @@ function toast(msg) {
 
 /* ── View switching ── */
 function showView(id) {
+  // Regular .view sections use display toggling
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  $(id).classList.add('active');
-  document.body.classList.toggle('shorts-active', id === 'view-shorts');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  const isShorts = id === 'view-shorts';
+  document.body.classList.toggle('shorts-active', isShorts);
+
+  if (isShorts) {
+    // Shorts is position:fixed — just add active, no scroll needed
+    $('view-shorts').classList.add('active');
+  } else {
+    // Remove shorts active class if switching away
+    $('view-shorts')?.classList.remove('active');
+    $(id).classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 }
 
 /* ── State boxes ── */
@@ -533,20 +544,31 @@ function makeRelatedCard(v) {
   if (videoId) card.addEventListener('click', () => loadVideo(videoId));
   return card;
 }
-
 /* ══════════════════════════════════════════════════════════
-   SHORTS
+   SHORTS  — scroll-snap full-viewport feed
    ══════════════════════════════════════════════════════════ */
 
-// Piped does not expose a dedicated Shorts endpoint.
-// The most reliable approach: search "#shorts", take ALL video results
-// (Piped search for #shorts returns almost exclusively actual Shorts),
-// then fall back to trending if that yields nothing.
-// Duration filtering is intentionally skipped here because Piped
-// frequently returns 0 or wrong durations for Shorts.
-function looksLikeShort(v) {
+/* ── Config ── */
+// Only show videos ≤ 60 s. duration=0 means Piped didn't report it — 
+// we include those since Piped routinely omits duration for real Shorts.
+// Anything with a known duration > 60s is excluded.
+const MAX_SHORT_DURATION = 60;
+
+const SHORTS_QUERIES = [
+  '#shorts',
+  '#short',
+  'shorts funny 2025',
+  'viral shorts',
+  'shorts trending',
+];
+
+/* ── Helpers ── */
+function isActualShort(v) {
   if (!v || !v.url) return false;
-  return v.url.includes('/watch');
+  const dur = v.duration;
+  // Keep if duration unknown/zero OR within limit
+  if (dur === undefined || dur === null || dur <= 0) return true;
+  return dur <= MAX_SHORT_DURATION;
 }
 
 function dedupByVideoId(arr) {
@@ -559,15 +581,7 @@ function dedupByVideoId(arr) {
   });
 }
 
-// Multiple queries — Piped instances handle some better than others
-const SHORTS_QUERIES = [
-  '#shorts',
-  '#short',
-  'shorts 2025',
-  'funny shorts',
-  'viral shorts',
-];
-
+/* ── Nav ── */
 function navShorts() {
   history.pushState({}, '', '?shorts=1');
   setNavActive('nav-shorts');
@@ -581,203 +595,228 @@ function setNavActive(activeId) {
   if (btn) btn.classList.add('active');
 }
 
+/* ── Load ── */
 async function loadShorts() {
   if (shortsLoading) return;
   shortsLoading = true;
-  showState('shorts-state', 'loading', 'Finding Shorts…');
-  setInstanceStatus('checking');
 
-  const collected = [];
-  let gotAny = false;
+  const scroller = $('shorts-scroller');
+  const ph = $('shorts-placeholder');
+  if (ph) ph.innerHTML = '<div class="spinner large"></div><p>Finding Shorts…</p>';
 
   try {
-    // Strategy A: search each query, stop once we have ≥20 results
+    const collected = [];
+
+    // Search each query and strictly filter to ≤60s (or unknown duration)
     for (const q of SHORTS_QUERIES) {
-      if (collected.length >= 20) break;
+      if (collected.length >= 25) break;
       try {
         const data  = await apiGet('/search', { q, filter: 'videos' });
-        const items = (data.items || []).filter(v => v.url && v.url.includes('/watch'));
-        if (items.length) {
-          collected.push(...items);
-          gotAny = true;
-          // Save nextpage from the best query for infinite-scroll later
-          if (!shortsNextpage && data.nextpage) shortsNextpage = data.nextpage;
-        }
-      } catch (e) {
-        // silently try next query
-      }
+        const items = (data.items || []).filter(isActualShort);
+        collected.push(...items);
+        if (!shortsNextpage && data.nextpage) shortsNextpage = data.nextpage;
+      } catch (_) { /* try next */ }
     }
 
-    // Strategy B: fall back to all trending videos if search yielded nothing
-    if (!gotAny) {
+    // Fallback: trending, strictly filtered
+    if (collected.length === 0) {
       try {
         const data = await apiGet('/trending', { region: shortsRegion });
-        if (Array.isArray(data)) {
-          collected.push(...data.filter(v => v.url && v.url.includes('/watch')));
-          gotAny = collected.length > 0;
-        }
+        if (Array.isArray(data)) collected.push(...data.filter(isActualShort));
       } catch (_) {}
     }
 
     const unique = dedupByVideoId(collected);
 
     if (!unique.length) {
-      showState('shorts-state', 'error',
-        'Could not load Shorts — the current Piped instance may be down or rate-limiting requests. Try switching instances using the dropdown at the top.',
-        loadShorts);
+      if (ph) ph.innerHTML = `
+        <strong>No Shorts found</strong>
+        <p>The current Piped instance couldn't return short videos.<br>Try switching instances using the dropdown.</p>
+        <button class="retry-btn" onclick="loadShorts()">Try again</button>`;
       return;
     }
 
-    hideState('shorts-state');
     shortsItems = unique;
     shortsIndex = 0;
-    renderShortsItem(0, true);
-    updateShortsNav();
+
+    // Remove placeholder, render all items into scroller
+    if (ph) ph.remove();
+    renderAllShorts(scroller);
+
+    // Observe scroll to track active index
+    initShortsScrollObserver(scroller);
 
   } catch (e) {
-    showState('shorts-state', 'error', e.message, loadShorts);
+    if (ph) ph.innerHTML = `
+      <strong>Error loading Shorts</strong>
+      <p>${esc(e.message)}</p>
+      <button class="retry-btn" onclick="loadShorts()">Try again</button>`;
   } finally {
     shortsLoading = false;
   }
 }
 
-function renderShortsItem(idx, instant = false) {
-  const feed    = $('shorts-feed');
-  const sidebar = $('shorts-sidebar');
-  if (!feed || !sidebar) return;
+/* ── Render all items ── */
+function renderAllShorts(scroller) {
+  shortsItems.forEach((v, idx) => {
+    const item = makeShortItem(v, idx);
+    scroller.appendChild(item);
+  });
+}
 
-  const v = shortsItems[idx];
-  if (!v) return;
-
+function makeShortItem(v, idx) {
   const videoId = extractId(v.url);
   const thumb   = v.thumbnail || '';
+  const dur     = v.duration > 0 ? fmtDuration(v.duration) : '';
 
-  // Build card HTML
-  feed.innerHTML = `
-    <div class="shorts-card ${instant ? '' : 'shorts-enter'}" id="shorts-card">
-      <div class="shorts-player-wrap" id="shorts-player-wrap">
-        ${thumb ? `<img class="shorts-thumb" id="shorts-thumb" src="${esc(thumb)}" alt="" />` : ''}
-        <button class="shorts-play-overlay" id="shorts-play-btn" onclick="playShort('${esc(videoId)}')" aria-label="Play">
-          <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
-            <circle cx="22" cy="22" r="22" fill="rgba(0,0,0,0.55)"/>
-            <polygon points="17,13 35,22 17,31" fill="white"/>
-          </svg>
+  const item = document.createElement('div');
+  item.className = 'short-item';
+  item.dataset.idx = idx;
+
+  item.innerHTML = `
+    <div class="short-inner">
+      ${thumb ? `<img class="short-thumb" src="${esc(thumb)}" alt="" loading="lazy" decoding="async" />` : ''}
+      ${dur ? `<div class="short-duration">${esc(dur)}</div>` : ''}
+
+      <button class="short-play-btn" aria-label="Play ${esc(v.title || 'short')}" data-videoid="${esc(videoId)}">
+        <div class="short-play-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><polygon points="6,3 20,12 6,21"/></svg>
+        </div>
+      </button>
+
+      <div class="short-iframe-wrap" id="short-if-${esc(idx)}"></div>
+
+      <div class="short-info">
+        <p class="short-channel">${esc(v.uploader || v.uploaderName || '')}</p>
+        <p class="short-title">${esc(v.title || '')}</p>
+        <p class="short-meta">${fmtViews(v.views)}</p>
+      </div>
+
+      <div class="short-actions">
+        <a class="short-act" href="https://www.youtube.com/shorts/${esc(videoId)}"
+           target="_blank" rel="noopener" title="Open on YouTube">
+          <div class="short-act-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+          </div>
+          <span>YouTube</span>
+        </a>
+        <button class="short-act" onclick="loadVideo('${esc(videoId)}')" title="Full page">
+          <div class="short-act-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 3 9 9 3 9"/></svg>
+          </div>
+          <span>Expand</span>
         </button>
-        <div id="shorts-iframe-wrap" class="shorts-iframe-wrap hidden"></div>
       </div>
-      <div class="shorts-info">
-        <p class="shorts-title">${esc(v.title || '')}</p>
-        <p class="shorts-channel">${esc(v.uploader || v.uploaderName || '')}</p>
-        <p class="shorts-meta">${fmtViews(v.views)}${v.uploadedDate ? ' · ' + esc(v.uploadedDate) : ''}</p>
-      </div>
-      <div class="shorts-counter">${idx + 1} / ${shortsItems.length}</div>
     </div>`;
 
-  // Sidebar actions
-  sidebar.innerHTML = `
-    <div class="shorts-actions">
-      <button class="short-action-btn" onclick="playShort('${esc(videoId)}')" title="Play">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-        <span>Play</span>
-      </button>
-      <button class="short-action-btn" onclick="loadVideo('${esc(videoId)}')" title="Full page">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 3 9 9 3 9"/></svg>
-        <span>Expand</span>
-      </button>
-      <a class="short-action-btn" href="https://www.youtube.com/shorts/${esc(videoId)}" target="_blank" rel="noopener" title="Open on YouTube">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
-        <span>YouTube</span>
-      </a>
-      <div class="short-action-divider"></div>
-      <span class="short-action-label">${fmtDuration(v.duration)}</span>
-    </div>`;
+  // Play button handler
+  item.querySelector('.short-play-btn').addEventListener('click', () => {
+    playShortInItem(item, videoId, idx);
+  });
 
-  // Preload next if close to end
-  if (idx >= shortsItems.length - 3) preloadMoreShorts();
+  return item;
 }
 
-function playShort(videoId) {
-  const iWrap  = $('shorts-iframe-wrap');
-  const playBtn = $('shorts-play-btn');
-  const thumb  = $('shorts-thumb');
-  if (!iWrap) return;
+function playShortInItem(item, videoId, idx) {
+  const ifWrap  = item.querySelector('.short-iframe-wrap');
+  const playBtn = item.querySelector('.short-play-btn');
+  const thumb   = item.querySelector('.short-thumb');
+  if (!ifWrap) return;
 
-  iWrap.innerHTML = `<iframe
+  ifWrap.innerHTML = `<iframe
     src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&loop=1&playlist=${videoId}"
     allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-    allowfullscreen title="Short video player"></iframe>`;
-
-  iWrap.classList.remove('hidden');
+    allowfullscreen></iframe>`;
+  ifWrap.classList.add('active');
   if (playBtn) playBtn.style.display = 'none';
-  if (thumb)   thumb.style.display   = 'none';
+  if (thumb)   thumb.style.opacity   = '0';
 }
 
-function shortsNav(dir) {
-  if (shortsIsTransitioning) return;
-  const newIdx = shortsIndex + dir;
-  if (newIdx < 0 || newIdx >= shortsItems.length) return;
+/* ── Scroll observer — tracks which item is visible ── */
+function initShortsScrollObserver(scroller) {
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const idx = Number(entry.target.dataset.idx);
+        shortsIndex = idx;
 
-  shortsIsTransitioning = true;
-  shortsIndex = newIdx;
+        // Pause iframes in items that scrolled away
+        document.querySelectorAll('.short-item').forEach((el, i) => {
+          if (i !== idx) {
+            const iw = el.querySelector('.short-iframe-wrap');
+            if (iw && iw.classList.contains('active')) {
+              iw.innerHTML = '';
+              iw.classList.remove('active');
+              const pb = el.querySelector('.short-play-btn');
+              const th = el.querySelector('.short-thumb');
+              if (pb) pb.style.display = '';
+              if (th) th.style.opacity = '';
+            }
+          }
+        });
 
-  // Stop any playing iframe first
-  const iWrap = $('shorts-iframe-wrap');
-  if (iWrap) iWrap.innerHTML = '';
+        // Preload more when near the end
+        if (idx >= shortsItems.length - 4) preloadMoreShorts();
+      }
+    });
+  }, { root: scroller, threshold: 0.6 });
 
-  renderShortsItem(shortsIndex);
-  updateShortsNav();
-
-  setTimeout(() => { shortsIsTransitioning = false; }, 340);
+  scroller.querySelectorAll('.short-item').forEach(el => obs.observe(el));
+  // Store observer to add new items later
+  scroller._observer = obs;
 }
 
-function updateShortsNav() {
-  const up   = $('shorts-up');
-  const down = $('shorts-down');
-  if (up)   up.disabled   = shortsIndex <= 0;
-  if (down) down.disabled = shortsIndex >= shortsItems.length - 1;
-}
-
+/* ── Preload more shorts ── */
 async function preloadMoreShorts() {
   if (shortsLoading || !shortsNextpage) return;
   shortsLoading = true;
   try {
     const data  = await apiGet('/search', { q: '#shorts', filter: 'videos', nextpage: shortsNextpage });
-    const items = (data.items || []).filter(v => v.url && v.url.includes('/watch'));
+    const items = (data.items || []).filter(isActualShort);
     shortsNextpage = data.nextpage || null;
-    shortsItems.push(...items);
-    updateShortsNav();
-    // Refresh counter
-    const counter = document.querySelector('.shorts-counter');
-    if (counter) counter.textContent = `${shortsIndex + 1} / ${shortsItems.length}`;
-  } catch (_) { /* silent */ }
+
+    const scroller  = $('shorts-scroller');
+    const startIdx  = shortsItems.length;
+    const newUnique = dedupByVideoId([...shortsItems, ...items]).slice(startIdx);
+
+    newUnique.forEach((v, i) => {
+      const item = makeShortItem(v, startIdx + i);
+      scroller.appendChild(item);
+      if (scroller._observer) scroller._observer.observe(item);
+    });
+    shortsItems.push(...newUnique);
+  } catch (_) {}
   finally { shortsLoading = false; }
 }
 
-/* Keyboard navigation for Shorts */
+/* ── Keyboard for shorts ── */
 document.addEventListener('keydown', e => {
   if (!$('view-shorts')?.classList.contains('active')) return;
-  if (e.key === 'ArrowUp'   || e.key === 'k') { e.preventDefault(); shortsNav(-1); }
-  if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); shortsNav(1); }
+  const scroller = $('shorts-scroller');
+  if (!scroller) return;
+  const items = scroller.querySelectorAll('.short-item');
+  if (!items.length) return;
+
+  if (e.key === 'ArrowDown' || e.key === 'j') {
+    e.preventDefault();
+    const next = items[Math.min(shortsIndex + 1, items.length - 1)];
+    if (next) next.scrollIntoView({ behavior: 'smooth' });
+  }
+  if (e.key === 'ArrowUp' || e.key === 'k') {
+    e.preventDefault();
+    const prev = items[Math.max(shortsIndex - 1, 0)];
+    if (prev) prev.scrollIntoView({ behavior: 'smooth' });
+  }
   if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
-    const v = shortsItems[shortsIndex];
-    if (v) playShort(extractId(v.url));
+    const cur = items[shortsIndex];
+    if (cur) {
+      const btn = cur.querySelector('.short-play-btn');
+      if (btn && btn.style.display !== 'none') btn.click();
+    }
   }
 });
 
-/* Touch swipe for Shorts */
-(function() {
-  let touchStartY = 0;
-  document.addEventListener('touchstart', e => {
-    if (!$('view-shorts')?.classList.contains('active')) return;
-    touchStartY = e.touches[0].clientY;
-  }, { passive: true });
-  document.addEventListener('touchend', e => {
-    if (!$('view-shorts')?.classList.contains('active')) return;
-    const dy = touchStartY - e.changedTouches[0].clientY;
-    if (Math.abs(dy) > 60) shortsNav(dy > 0 ? 1 : -1);
-  }, { passive: true });
-})();
 
 /* ── URL routing ── */
 function route() {
